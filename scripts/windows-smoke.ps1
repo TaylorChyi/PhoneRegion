@@ -321,10 +321,13 @@ function Wait-Dialog([string]$Title, [int]$ProcessId) {
 
 function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame) {
     # Explorer builds the file-name ComboBox after the dialog HWND appears.
-    # Locate its Edit[1001] directly; Edit[41477] belongs to the address bar.
+    # The filename edit is 1001 in the Save dialogue and 1148 in the classic Open dialogue.
     for ($attempt = 0; $attempt -lt 80; $attempt++) {
         if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog)) {
             $filename = [NativeWindow]::FindDialogChild($Dialog, 'Edit', 1001)
+            if ($filename -eq [IntPtr]::Zero) {
+                $filename = [NativeWindow]::FindDialogChild($Dialog, 'Edit', 1148)
+            }
             $confirm = [NativeWindow]::FindDialogChild($Dialog, 'Button', 1)
             if ($filename -ne [IntPtr]::Zero -and $confirm -ne [IntPtr]::Zero -and
                 [NativeWindow]::IsWindowEnabled($filename)) {
