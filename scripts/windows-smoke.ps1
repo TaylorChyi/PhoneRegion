@@ -50,6 +50,33 @@ public static class NativeWindow
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool PostMessageW(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
 
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowCallback callback, IntPtr argument);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int size);
+
+    public static string DescribeProcessWindows(uint pid)
+    {
+        var lines = new List<string>();
+        EnumWindowCallback record = (hwnd, unused) => {
+            var cls = new StringBuilder(100);
+            var title = new StringBuilder(240);
+            GetClassNameW(hwnd, cls, cls.Capacity);
+            GetWindowTextW(hwnd, title, title.Capacity);
+            lines.Add($"{cls} [{GetDlgCtrlID(hwnd)}] {title}");
+            return true;
+        };
+        EnumWindows((hwnd, unused) => {
+            GetWindowThreadProcessId(hwnd, out uint owner);
+            if (owner == pid) {
+                record(hwnd, unused);
+                EnumChildWindows(hwnd, record, IntPtr.Zero);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return string.Join(" | ", lines);
+    }
+
     public static IntPtr FindFileNameEdit(IntPtr dialog)
     {
         IntPtr result = IntPtr.Zero;
@@ -147,6 +174,7 @@ try {
         }
     }
     $application = Start-Process -FilePath $copiedExe -WorkingDirectory $isolated -PassThru
+    [void]$application.WaitForInputIdle(15000)
     $window = [IntPtr]::Zero
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
         Start-Sleep -Milliseconds 150
@@ -158,14 +186,15 @@ try {
         if ($candidate -ne [IntPtr]::Zero) {
             [uint32]$windowProcessId = 0
             [void][NativeWindow]::GetWindowThreadProcessId($candidate, [ref]$windowProcessId)
-            if ($windowProcessId -eq $application.Id) {
+            if ($windowProcessId -eq $application.Id -and
+                [NativeWindow]::GetDlgItem($candidate, 1005) -ne [IntPtr]::Zero) {
                 $window = $candidate
                 break
             }
         }
     }
     if ($window -eq [IntPtr]::Zero) {
-        throw 'The native application window did not appear within 15 seconds.'
+        throw 'The native application controls did not initialise within 15 seconds.'
     }
 
     $inputControl = [NativeWindow]::GetDlgItem($window, 1001)
@@ -231,6 +260,12 @@ try {
         throw 'The original input CSV disappeared.'
     }
     Write-Host 'Windows GUI smoke test passed, including a standalone EXE launch.'
+}
+catch {
+    if ($null -ne $application -and -not $application.HasExited) {
+        Write-Host ([NativeWindow]::DescribeProcessWindows([uint32]$application.Id))
+    }
+    throw
 }
 finally {
     if ($null -ne $application) {

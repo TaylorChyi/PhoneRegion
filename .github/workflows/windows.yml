@@ -11,16 +11,28 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: true
+            exe: ./target/release/PhoneRegion.exe
+          - build: false
+            exe: ./download/PhoneRegion.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Check locked dependencies
+        if: matrix.build
         run: cargo test --locked --all-targets
       - name: Build Windows application
+        if: matrix.build
         run: cargo build --release --locked
       - name: Exercise offline interface in light and dark themes
+        env:
+          EXE_PATH: ${{ matrix.exe }}
         shell: pwsh
         run: |
           $themeKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
@@ -32,10 +44,7 @@ jobs:
             New-Item -Path $themeKey -Force | Out-Null
             foreach ($theme in @(1, 0)) {
               Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value $theme
-              ./scripts/windows-smoke.ps1 -ExePath ./target/release/PhoneRegion.exe -BlockNetwork
-              if (Test-Path -LiteralPath ./download/PhoneRegion.exe) {
-                ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork
-              }
+              ./scripts/windows-smoke.ps1 -ExePath $env:EXE_PATH -BlockNetwork
             }
           }
           finally {
@@ -50,6 +59,7 @@ jobs:
             }
           }
       - name: Upload tested application
+        if: matrix.build
         uses: actions/upload-artifact@v4
         with:
           name: PhoneRegion-Windows-x64
