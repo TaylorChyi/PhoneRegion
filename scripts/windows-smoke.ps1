@@ -89,24 +89,19 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
-    public static IntPtr FindFileNameEdit(IntPtr dialog)
-    {
-        IntPtr result = IntPtr.Zero;
-        EnumChildWindows(dialog, (child, ignored) => {
-            var className = new StringBuilder(64);
-            GetClassNameW(child, className, className.Capacity);
-            if (className.ToString() != "Edit") return true;
-            for (IntPtr ancestor = child; ancestor != IntPtr.Zero && ancestor != dialog;
-                 ancestor = GetParent(ancestor)) {
-                int id = GetDlgCtrlID(ancestor);
-                if (id == 1148 || id == 1152) {
-                    result = child;
-                    return false;
-                }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return result;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo {
+        public int size, flags;
+        public IntPtr active, focus, capture, menu, move, caret;
+        public int left, top, right, bottom;
+    }
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+    public static IntPtr FocusedControl(IntPtr window) {
+        var info = new GuiThreadInfo { size = Marshal.SizeOf<GuiThreadInfo>() };
+        uint thread = GetWindowThreadProcessId(window, out uint owner);
+        return GetGUIThreadInfo(thread, ref info) ? info.focus : IntPtr.Zero;
     }
 }
 '@
@@ -154,23 +149,19 @@ function Wait-Dialog([string]$Title, [int]$ProcessId) {
 }
 
 function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
-    # The common dialog creates and may replace its filename edit while initialising.
-    # Wait for its value to round-trip before asking the dialog to accept it.
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        $filename = [NativeWindow]::FindFileNameEdit($Dialog)
-        $accept = [NativeWindow]::GetDlgItem($Dialog, 1)
-        if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog) -and
-            [NativeWindow]::IsWindowVisible($filename) -and [NativeWindow]::IsWindowEnabled($accept)) {
-            # Use the file picker's keyboard interface. Explorer maintains a separate
-            # filename model that direct WM_SETTEXT messages do not always update.
+    # Explorer uses different child IDs for Open and Save. Alt+N focuses the
+    # filename editor in both dialogs on the Windows runner's English desktop.
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog)) {
             [void][NativeWindow]::SetForegroundWindow($Dialog)
             if ([NativeWindow]::GetForegroundWindow() -eq $Dialog) {
                 [System.Windows.Forms.SendKeys]::SendWait('%n')
                 [System.Windows.Forms.SendKeys]::SendWait('^a')
                 Set-Clipboard -Value $Path
                 [System.Windows.Forms.SendKeys]::SendWait('^v')
-                Start-Sleep -Milliseconds 250
-                if ((Read-WindowText $filename) -eq $Path) {
+                Start-Sleep -Milliseconds 350
+                $focused = [NativeWindow]::FocusedControl($Dialog)
+                if ($focused -ne [IntPtr]::Zero -and (Read-WindowText $focused) -eq $Path) {
                     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
                     return
                 }
