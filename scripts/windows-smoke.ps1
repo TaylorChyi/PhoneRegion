@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
@@ -77,6 +79,11 @@ public static class NativeWindow
         return string.Join(" | ", lines);
     }
 
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowEnabled(IntPtr hwnd);
+
     public static IntPtr FindFileNameEdit(IntPtr dialog)
     {
         IntPtr result = IntPtr.Zero;
@@ -147,12 +154,16 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         $filename = [NativeWindow]::FindFileNameEdit($Dialog)
         $accept = [NativeWindow]::GetDlgItem($Dialog, 1)
-        if ($filename -ne [IntPtr]::Zero -and $accept -ne [IntPtr]::Zero) {
-            [void][NativeWindow]::SendTextMessageW($filename, 0x000C, [IntPtr]::Zero, $Path)
-            if ((Read-WindowText $filename) -eq $Path) {
-                if (-not [NativeWindow]::PostMessageW($Dialog, 0x0111, [IntPtr]1, $accept)) {
-                    throw 'The common dialog did not accept its OK command.'
-                }
+        if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog) -and
+            [NativeWindow]::IsWindowVisible($filename) -and [NativeWindow]::IsWindowEnabled($accept)) {
+            $edit = [System.Windows.Automation.AutomationElement]::FromHandle($filename)
+            $value = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            $edit.SetFocus()
+            $value.SetValue($Path)
+            Start-Sleep -Milliseconds 300
+            if ($value.Current.Value -eq $Path) {
+                $button = [System.Windows.Automation.AutomationElement]::FromHandle($accept)
+                $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
                 return
             }
         }
@@ -270,6 +281,15 @@ try {
 catch {
     if ($null -ne $application -and -not $application.HasExited) {
         Write-Host ([NativeWindow]::DescribeProcessWindows([uint32]$application.Id))
+        $byProcess = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$application.Id)
+        $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Children, $byProcess)
+        foreach ($wnd in $windows) {
+            $labels = $wnd.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            Write-Host (($labels | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' / ')
+        }
     }
     throw
 }
