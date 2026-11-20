@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="64" height="64" alt="">
+
 # PhoneRegion · Offline mobile number lookup for mainland China
 
 [简体中文](README.md) · **English**
@@ -30,7 +32,7 @@ Double-click the downloaded file to start. No installation, account or configura
 
 ## What a batch export looks like
 
-Click **导入 Excel / CSV…** (Import Excel / CSV), choose the input file, then choose where to save the results. PhoneRegion reads column A of the first worksheet or the first column of a CSV. A common heading such as 手机号 (mobile number) is optional.
+Click **＋ 导入文件** (Import file) in the lower-left corner of the input box. Choose your spreadsheet, then choose where to save the results. PhoneRegion reads column A of the first worksheet or the first column of a CSV. A common heading such as 手机号 (mobile number) is optional.
 
 | 手机号 · Mobile number | 运营商 · Carrier | 归属地省份 · Province | 归属地地级市 · City |
 | --- | --- | --- | --- |
