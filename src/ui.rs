@@ -38,6 +38,7 @@ const WS_TABSTOP: u32 = 0x00010000;
 const ES_AUTOHSCROLL: u32 = 0x0080;
 const BS_OWNERDRAW: u32 = 0x000B;
 const SS_LEFT: u32 = 0;
+const SS_RIGHT: u32 = 2;
 const SS_OWNERDRAW: u32 = 0x000D;
 const WM_CREATE: u32 = 0x0001;
 const WM_CLOSE: u32 = 0x0010;
@@ -409,6 +410,7 @@ struct Layout {
     status_y: f32,
     content_height: f32,
     columns: bool,
+    intro_extra: f32,
 }
 
 impl Layout {
@@ -416,9 +418,10 @@ impl Layout {
         let margin = if window_width < 680.0 { 24.0 } else { 48.0 };
         let width = (window_width - 2.0 * margin).clamp(1.0, 1080.0);
         let columns = width >= 720.0;
-        let result_y = 296.0;
+        let intro_extra = if width < 680.0 { 28.0 } else { 0.0 };
+        let result_y = 296.0 + intro_extra;
         let result_height = if result {
-            if columns { 112.0 } else { 216.0 }
+            if columns { 112.0 } else { 294.0 }
         } else if error {
             56.0
         } else {
@@ -427,7 +430,7 @@ impl Layout {
         let batch_y = if result_height > 0.0 {
             result_y + result_height + 43.0
         } else {
-            338.0
+            338.0 + intro_extra
         };
         let status_y = batch_y + 91.0;
         Self {
@@ -439,6 +442,7 @@ impl Layout {
             status_y,
             content_height: status_y + 80.0,
             columns,
+            intro_extra,
         }
     }
 }
@@ -707,8 +711,17 @@ unsafe fn reflow(hwnd: Hwnd) {
     let left = layout.margin + ((width - 2.0 * layout.margin - layout.width).max(0.0) / 2.0);
     let full = layout.width;
     let content_scroll = scroll;
+    let extra = layout.intro_extra;
     unsafe {
-        place((*state).brand, left + 36.0, 17.0, 220.0, 30.0, dpi, 0);
+        place(
+            (*state).brand,
+            left + 36.0,
+            17.0,
+            220.0,
+            30.0,
+            dpi,
+            content_scroll,
+        );
         place(
             (*state).offline,
             left + full - 160.0,
@@ -716,7 +729,7 @@ unsafe fn reflow(hwnd: Hwnd) {
             160.0,
             28.0,
             dpi,
-            0,
+            content_scroll,
         );
         place((*state).title, left, 88.0, full, 50.0, dpi, content_scroll);
         place(
@@ -724,14 +737,14 @@ unsafe fn reflow(hwnd: Hwnd) {
             left,
             142.0,
             full,
-            31.0,
+            31.0 + extra,
             dpi,
             content_scroll,
         );
         place(
             (*state).input,
             left + 20.0,
-            208.0,
+            208.0 + extra,
             (full - 106.0).max(80.0),
             42.0,
             dpi,
@@ -740,7 +753,7 @@ unsafe fn reflow(hwnd: Hwnd) {
         place(
             (*state).query,
             left + full - 65.0,
-            204.0,
+            204.0 + extra,
             48.0,
             48.0,
             dpi,
@@ -749,7 +762,7 @@ unsafe fn reflow(hwnd: Hwnd) {
         place(
             (*state).result_label,
             left,
-            273.0,
+            273.0 + extra,
             full,
             22.0,
             dpi,
@@ -1047,7 +1060,7 @@ unsafe extern "system" fn window_proc(
                     hwnd,
                     "STATIC",
                     "离线 · 本机查询",
-                    SS_LEFT,
+                    SS_RIGHT,
                     0,
                     [0, 0, 1, 1],
                     small_font,
@@ -1133,7 +1146,7 @@ unsafe extern "system" fn window_proc(
                 let progress = create_control(
                     hwnd,
                     "STATIC",
-                    "支持 .xlsx、.xls、.csv，读取首列并另存为四列文件。",
+                    "",
                     SS_LEFT,
                     ID_PROGRESS,
                     [0, 0, 1, 1],
@@ -1381,7 +1394,7 @@ unsafe extern "system" fn window_proc(
                                     / 2.0),
                             dpi,
                         ),
-                        pixels(20.0, dpi),
+                        pixels(20.0 - scroll, dpi),
                         icon,
                         pixels(24.0, dpi),
                         pixels(24.0, dpi),
@@ -1393,7 +1406,14 @@ unsafe extern "system" fn window_proc(
             }
             if let Ok(canvas) = Canvas::new(wparam as Handle, dpi) {
                 let client_width = rect.right as f32 * 96.0 / dpi as f32;
-                let _ = canvas.line(0.0, 65.0, client_width, 65.0, 1.0, rgb(colors.border));
+                let _ = canvas.line(
+                    0.0,
+                    65.0 - scroll,
+                    client_width,
+                    65.0 - scroll,
+                    1.0,
+                    rgb(colors.border),
+                );
                 let _ = canvas.fill_round_rect(
                     layout.margin
                         + ((rect.right as f32 * 96.0 / dpi as f32
@@ -1401,7 +1421,7 @@ unsafe extern "system" fn window_proc(
                             - layout.width)
                             .max(0.0)
                             / 2.0),
-                    190.0 - scroll,
+                    190.0 + layout.intro_extra - scroll,
                     layout.width,
                     72.0,
                     18.0,
@@ -1414,7 +1434,7 @@ unsafe extern "system" fn window_proc(
                             - layout.width)
                             .max(0.0)
                             / 2.0),
-                    190.0 - scroll,
+                    190.0 + layout.intro_extra - scroll,
                     layout.width,
                     72.0,
                     18.0,
@@ -1479,7 +1499,15 @@ unsafe extern "system" fn window_proc(
             let disabled = item.state & ODS_DISABLED != 0;
             let focused = item.state & ODS_FOCUS != 0;
             unsafe {
-                FillRect(item.dc, &item.rect, (*state).theme.surface_brush);
+                FillRect(
+                    item.dc,
+                    &item.rect,
+                    if item.control_id == ID_QUERY as u32 {
+                        (*state).theme.field_brush
+                    } else {
+                        (*state).theme.surface_brush
+                    },
+                );
             }
             if let Ok(canvas) = Canvas::new(item.dc, dpi) {
                 match item.control_id as i32 {
@@ -1546,22 +1574,28 @@ unsafe extern "system" fn window_proc(
                         );
                         let _ = canvas.line(35.0, 28.0, 35.0, 42.0, 2.2, rgb(icon_ink));
                         let _ = canvas.line(28.0, 35.0, 42.0, 35.0, 2.2, rgb(icon_ink));
+                        let _ = canvas.line(w - 37.0, 30.0, w - 31.0, 36.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(w - 31.0, 36.0, w - 37.0, 42.0, 2.0, rgb(icon_ink));
                         unsafe {
                             draw_text(
                                 item.dc,
                                 "导入 Excel 或 CSV 文件",
                                 font,
                                 icon_ink,
-                                [64.0, 11.0, w - 80.0, 27.0],
+                                [64.0, 11.0, w - 112.0, 27.0],
                                 dpi,
                                 DT_SINGLELINE | DT_VCENTER,
                             );
                             draw_text(
                                 item.dc,
-                                "读取首列手机号，另存为含运营商、省份和地级市的四列文件",
+                                if w < 680.0 {
+                                    "首列手机号 → Excel 或 CSV 结果"
+                                } else {
+                                    "读取首列手机号，结果另存为 Excel 或 CSV"
+                                },
                                 small_font,
                                 colors.muted,
-                                [64.0, 38.0, w - 80.0, 25.0],
+                                [64.0, 38.0, w - 112.0, 25.0],
                                 dpi,
                                 DT_SINGLELINE | DT_VCENTER,
                             );
@@ -1586,6 +1620,20 @@ unsafe extern "system" fn window_proc(
                                 1.0,
                                 rgb(colors.border),
                             );
+                            if columns {
+                                let step = (w - 40.0) / 3.0;
+                                for index in [1.0, 2.0] {
+                                    let divider = 20.0 + step * index - 9.0;
+                                    let _ = canvas.line(
+                                        divider,
+                                        23.0,
+                                        divider,
+                                        89.0,
+                                        1.0,
+                                        rgb(colors.border),
+                                    );
+                                }
+                            }
                             let entries = [
                                 ("运营商", view.carrier),
                                 ("归属地省份", view.province),
@@ -1599,7 +1647,7 @@ unsafe extern "system" fn window_proc(
                                         (w - 40.0) / 3.0 - 16.0,
                                     )
                                 } else {
-                                    (20.0, 14.0 + index as f32 * 68.0, w - 40.0)
+                                    (20.0, 14.0 + index as f32 * 92.0, w - 40.0)
                                 };
                                 unsafe {
                                     draw_text(

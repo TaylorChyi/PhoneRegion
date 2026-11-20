@@ -99,6 +99,11 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetClientRect(IntPtr window, out WindowRect rect);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WindowPoint { public int x, y; }
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ClientToScreen(IntPtr window, ref WindowPoint point);
     [DllImport("user32.dll")]
     public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
     [DllImport("user32.dll")]
@@ -283,17 +288,37 @@ function Read-WindowRect([IntPtr]$Window) {
 }
 
 function Assert-ControlBounds([IntPtr]$Window, [int[]]$Ids) {
-    $outer = Read-WindowRect $Window
+    $client = [NativeWindow+WindowRect]::new()
+    if (-not [NativeWindow]::GetClientRect($Window, [ref]$client)) {
+        throw 'Could not read the client viewport.'
+    }
+    $origin = [NativeWindow+WindowPoint]::new()
+    if (-not [NativeWindow]::ClientToScreen($Window, [ref]$origin)) {
+        throw 'Could not locate the client viewport on screen.'
+    }
+    $viewport = [NativeWindow+WindowRect]::new()
+    $viewport.left = $origin.x
+    $viewport.top = $origin.y
+    $viewport.right = $origin.x + $client.right
+    $viewport.bottom = $origin.y + $client.bottom
     foreach ($id in $Ids) {
         $control = [NativeWindow]::GetDlgItem($Window, $id)
         if ($control -eq [IntPtr]::Zero) { throw "Missing control $id after resizing." }
         $child = Read-WindowRect $control
         if ($child.right -le $child.left -or $child.bottom -le $child.top -or
-            $child.left -lt $outer.left -or $child.right -gt $outer.right -or
-            $child.top -lt $outer.top -or $child.bottom -gt $outer.bottom) {
-            throw "Control $id extends beyond the resized application window."
+            $child.left -lt $viewport.left -or $child.right -gt $viewport.right -or
+            $child.top -lt $viewport.top -or $child.bottom -gt $viewport.bottom) {
+            throw "Control $id extends beyond the visible client viewport."
         }
     }
+}
+
+function Scroll-WindowToEdge([IntPtr]$Window, [bool]$Bottom) {
+    $command = if ($Bottom) { 3 } else { 2 } # SB_PAGEDOWN / SB_PAGEUP
+    for ($page = 0; $page -lt 16; $page++) {
+        [void][NativeWindow]::SendMessageW($Window, 0x0115, [IntPtr]$command, [IntPtr]::Zero)
+    }
+    Start-Sleep -Milliseconds 100
 }
 
 function Check-WindowLayouts([IntPtr]$Window, [IntPtr]$ResultControl) {
@@ -312,12 +337,19 @@ function Check-WindowLayouts([IntPtr]$Window, [IntPtr]$ResultControl) {
                 throw 'Could not read the resized client area.'
             }
             $clientWidths += $client.right - $client.left
-            Assert-ControlBounds $Window @(1001, 1002, 1003, 1004, 1005)
+            Scroll-WindowToEdge $Window $false
+            Assert-ControlBounds $Window @(1001, 1002, 1004)
             $resultRect = Read-WindowRect $ResultControl
             $resultHeights += $resultRect.bottom - $resultRect.top
             if (-not (Read-WindowText $ResultControl).Contains('中国联通')) {
                 throw 'The lookup result disappeared while resizing.'
             }
+            if ($width -eq 720 -and $DemoDirectory) {
+                Save-DemoFrame $Window 'layout-narrow.png'
+            }
+            Scroll-WindowToEdge $Window $true
+            Assert-ControlBounds $Window @(1003, 1005)
+            Scroll-WindowToEdge $Window $false
         }
         if ($clientWidths[0] - $clientWidths[1] -lt 200) {
             throw 'The wide and narrow layouts did not receive distinct client widths.'
