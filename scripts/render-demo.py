@@ -18,8 +18,9 @@ SCENES = [
     ("06-formatted-result.png", 2100, "直接显示归属地", "See carrier, province and city"),
     ("07-before-import.png", 1000, "批量导入", "Import Excel or CSV"),
     ("08-open-dialog.png", 1150, "选择号码文件", "Choose the input file"),
-    ("09-save-dialog.png", 1150, "选择结果位置", "Choose where to save"),
-    ("10-batch-complete.png", 1600, "导出完成", "See the processed row count"),
+    ("09-ready-to-export.png", 1500, "处理完成，点击导出结果", "Process first, then choose Export"),
+    ("10-save-dialog.png", 1150, "选择保存位置", "Choose where to save the results"),
+    ("11-batch-complete.png", 1600, "导出完成", "See the processed row count"),
     ("result.csv", 3100, "四列查询结果", "Open the exported results"),
 ]
 
@@ -60,7 +61,7 @@ def check_captures(frames):
             shot = opened.convert("RGB")
         if min(shot.size) < 350 or max(ImageStat.Stat(shot).stddev) < 8:
             raise ValueError(f"Unusable Windows capture: {frames / name}")
-        if name not in {"08-open-dialog.png", "09-save-dialog.png"}:
+        if name not in {"08-open-dialog.png", "10-save-dialog.png"}:
             contaminated_rows = 0
             for y in range(shot.height - 3, shot.height):
                 blue_pixels = sum(

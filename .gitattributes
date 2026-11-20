@@ -5,3 +5,5 @@
 *.zip binary
 # Empty fourth fields in the region table represent an unknown prefecture.
 data/regions.tsv text eol=lf whitespace=-blank-at-eol
+# Embed and distribute the same UTF-8 BOM and CSV line endings on every platform.
+docs/example.csv -text whitespace=cr-at-eol

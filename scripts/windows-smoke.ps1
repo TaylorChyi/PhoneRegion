@@ -99,6 +99,10 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetClientRect(IntPtr window, out WindowRect rect);
+    [DllImport("user32.dll")]
+    public static extern bool GetUpdateRect(IntPtr window, out WindowRect rect, bool erase);
+    [DllImport("user32.dll")]
+    public static extern bool UpdateWindow(IntPtr window);
     [StructLayout(LayoutKind.Sequential)]
     public struct WindowPoint { public int x, y; }
     [DllImport("user32.dll")]
@@ -123,6 +127,45 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool EmptyClipboard();
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetClipboardData(uint format, IntPtr data);
+    [DllImport("user32.dll")]
+    public static extern bool CloseClipboard();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32.dll")]
+    public static extern bool GlobalUnlock(IntPtr memory);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GlobalFree(IntPtr memory);
+    public static void PutClipboardText(string value) {
+        var encoded = Encoding.Unicode.GetBytes(value + "\0");
+        IntPtr memory = GlobalAlloc(2, (UIntPtr)encoded.Length);
+        if (memory == IntPtr.Zero) throw new Exception("GlobalAlloc failed for clipboard text");
+        IntPtr pointer = GlobalLock(memory);
+        if (pointer == IntPtr.Zero) { GlobalFree(memory); throw new Exception("GlobalLock failed"); }
+        Marshal.Copy(encoded, 0, pointer, encoded.Length);
+        GlobalUnlock(memory);
+        bool opened = false;
+        for (int attempt = 0; attempt < 20 && !opened; attempt++) {
+            opened = OpenClipboard(IntPtr.Zero);
+            if (!opened) System.Threading.Thread.Sleep(25);
+        }
+        if (!opened) { GlobalFree(memory); throw new Exception("OpenClipboard failed"); }
+        try {
+            if (!EmptyClipboard() || SetClipboardData(13, memory) == IntPtr.Zero)
+                throw new Exception("SetClipboardData failed");
+            memory = IntPtr.Zero;
+        } finally {
+            CloseClipboard();
+            if (memory != IntPtr.Zero) GlobalFree(memory);
+        }
+    }
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr window, uint attribute,
         out WindowRect bounds, int size);
@@ -151,6 +194,95 @@ function Read-WindowText([IntPtr]$Window) {
     $text = [System.Text.StringBuilder]::new(4096)
     [void][NativeWindow]::ReadTextMessageW($Window, 0x000D, [IntPtr]$text.Capacity, $text)
     return $text.ToString()
+}
+
+function Assert-ResultState([IntPtr]$Window, [string]$Carrier, [string]$Province,
+                            [string]$City, [string]$Caveat) {
+    $labelControl = [NativeWindow]::GetDlgItem($Window, 1006)
+    if ($labelControl -ne [IntPtr]::Zero -and
+        [NativeWindow]::IsWindowVisible($labelControl) -and
+        (Read-WindowText $labelControl) -eq '查询结果') {
+        throw 'The removed result heading is still visible.'
+    }
+    $actual = Read-WindowText ([NativeWindow]::GetDlgItem($Window, 1004))
+    $expected = "运营商 $Carrier`r`n省份 $Province`r`n地级市 $City"
+    if ($actual -ne $expected) {
+        throw "Result fields differ. Expected '$expected'; got '$actual'."
+    }
+    $note = Read-WindowText ([NativeWindow]::GetDlgItem($Window, 1007))
+    if ($Caveat -eq '') {
+        if ($note -ne '') { throw "Unexpected result note: '$note'." }
+    }
+    elseif (-not $note.Contains($Caveat)) {
+        throw "Result note omitted '$Caveat': '$note'."
+    }
+}
+
+function Snapshot-StableControls([IntPtr]$Window) {
+    $snapshot = @{}
+    foreach ($id in @(1003, 1004, 1009)) {
+        $rect = Read-WindowRect ([NativeWindow]::GetDlgItem($Window, $id))
+        $snapshot[$id] = "{0},{1},{2},{3}" -f $rect.left, $rect.top, $rect.right, $rect.bottom
+    }
+    return $snapshot
+}
+
+function Assert-StableControls([IntPtr]$Window, [hashtable]$Baseline) {
+    $current = Snapshot-StableControls $Window
+    foreach ($id in $Baseline.Keys) {
+        if ($current[$id] -ne $Baseline[$id]) {
+            throw "Control $id moved during phone editing: $($Baseline[$id]) -> $($current[$id])."
+        }
+    }
+}
+
+function Assert-NoFullWindowInvalidation([IntPtr]$Window) {
+    $pending = [NativeWindow+WindowRect]::new()
+    if (-not [NativeWindow]::GetUpdateRect($Window, [ref]$pending, $false)) { return }
+    $client = [NativeWindow+WindowRect]::new()
+    [void][NativeWindow]::GetClientRect($Window, [ref]$client)
+    $pendingArea = ($pending.right - $pending.left) * ($pending.bottom - $pending.top)
+    $clientArea = $client.right * $client.bottom
+    if ($clientArea -gt 0 -and $pendingArea -gt $clientArea * 0.75) {
+        throw "Typing invalidated most of the application client: $pendingArea / $clientArea pixels."
+    }
+}
+
+function Check-LiveEditing([IntPtr]$Window, [IntPtr]$InputControl, [IntPtr]$QueryControl) {
+    [void][NativeWindow]::SendTextMessageW($InputControl, 0x000C, [IntPtr]::Zero, '')
+    Assert-ResultState $Window '—' '—' '—' ''
+    $stable = Snapshot-StableControls $Window
+    foreach ($character in '13213000000'.ToCharArray()) {
+        [void][NativeWindow]::UpdateWindow($Window)
+        [void][NativeWindow]::SendMessageW($InputControl, 0x0102, [IntPtr][int][char]$character, [IntPtr]::Zero)
+        Assert-NoFullWindowInvalidation $Window
+        Assert-StableControls $Window $stable
+        if ((Read-WindowText $InputControl).Length -lt 11) {
+            Assert-ResultState $Window '—' '—' '—' ''
+        }
+    }
+    if ((Read-WindowText $InputControl) -ne '13213000000') {
+        throw 'WM_CHAR did not enter all eleven digits.'
+    }
+    Assert-ResultState $Window '中国联通' '河南省' '郑州市' '原号段'
+    [void][NativeWindow]::UpdateWindow($Window)
+    [void][NativeWindow]::SendMessageW($InputControl, 0x0102, [IntPtr]8, [IntPtr]::Zero)
+    Assert-NoFullWindowInvalidation $Window
+    if ((Read-WindowText $InputControl) -ne '1321300000') { throw 'Backspace did not remove the last digit.' }
+    Assert-ResultState $Window '—' '—' '—' ''
+    Assert-StableControls $Window $stable
+    [void][NativeWindow]::SendMessageW($InputControl, 0x0102, [IntPtr][int][char]'0', [IntPtr]::Zero)
+    Assert-ResultState $Window '中国联通' '河南省' '郑州市' '原号段'
+    [void][NativeWindow]::SendTextMessageW($InputControl, 0x000C, [IntPtr]::Zero, '')
+    [NativeWindow]::PutClipboardText('+86 132 1300 0000')
+    [void][NativeWindow]::SendMessageW($InputControl, 0x0302, [IntPtr]::Zero, [IntPtr]::Zero)
+    if ((Read-WindowText $InputControl) -ne '+86 132 1300 0000') {
+        throw 'WM_PASTE did not insert the formatted phone number.'
+    }
+    Assert-ResultState $Window '中国联通' '河南省' '郑州市' '原号段'
+    Assert-StableControls $Window $stable
+    [void][NativeWindow]::SendMessageW($QueryControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    Assert-ResultState $Window '中国联通' '河南省' '郑州市' '原号段'
 }
 
 function Assert-Result([IntPtr]$InputControl, [IntPtr]$QueryControl, [IntPtr]$ResultControl,
@@ -417,7 +549,7 @@ try {
         if ($application.HasExited) {
             throw "The application exited before its window appeared (exit code $($application.ExitCode))."
         }
-        $candidate = [NativeWindow]::FindWindowW('PhoneRegionMainWindow', '手机号归属地 · 离线查询')
+        $candidate = [NativeWindow]::FindWindowW('PhoneRegionMainWindow', 'PhoneRegion')
         if ($candidate -ne [IntPtr]::Zero) {
             [uint32]$windowProcessId = 0
             [void][NativeWindow]::GetWindowThreadProcessId($candidate, [ref]$windowProcessId)
@@ -451,6 +583,8 @@ try {
     if ($demoEnabled) {
         Save-DemoFrame $window '01-empty.png'
     }
+    Assert-ResultState $window '—' '—' '—' ''
+    Check-LiveEditing $window $inputControl $queryControl
     Assert-Result $inputControl $queryControl $resultControl '13213000000' @('中国联通', '河南省', '郑州市') @() -Live
     Save-DemoFrame $window '02-single-result.png'
     $clientWidths = Check-WindowLayouts $window $resultControl
@@ -478,17 +612,20 @@ try {
     }
     Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
     Save-DemoFrame $window '06-formatted-result.png'
-    Assert-Result $inputControl $queryControl $resultControl '123' @('请输入 11 位') @('中国联通', '河南省', '郑州市')
+    [void][NativeWindow]::SendTextMessageW($inputControl, 0x000C, [IntPtr]::Zero, '123')
+    Assert-ResultState $window '—' '—' '—' ''
+    [void][NativeWindow]::SendMessageW($queryControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    Assert-ResultState $window '—' '—' '—' '请输入 11 位'
+    [void][NativeWindow]::SendTextMessageW($inputControl, 0x000C, [IntPtr]::Zero, '13447100000')
+    Assert-ResultState $window '—' '—' '—' '未收录'
     [void][NativeWindow]::SendTextMessageW($inputControl, 0x000C, [IntPtr]::Zero, '')
-    if ((Read-WindowText $resultControl) -ne '') {
-        throw 'Clearing the input did not clear the old result.'
-    }
+    Assert-ResultState $window '—' '—' '—' ''
     if (-not [NativeWindow]::PostMessageW($inputControl, 0x0100, [IntPtr]13, [IntPtr]::Zero)) {
         throw 'Could not send Enter to the phone input.'
     }
     $enterWorked = $false
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        if ((Read-WindowText $resultControl).Contains('请输入手机号')) {
+        if ((Read-WindowText ([NativeWindow]::GetDlgItem($window, 1007))).Contains('请输入手机号')) {
             $enterWorked = $true
             break
         }
@@ -497,9 +634,31 @@ try {
     if (-not $enterWorked) {
         throw 'Pressing Enter in the phone input did not trigger a query.'
     }
+    Assert-ResultState $window '—' '—' '—' '请输入手机号'
     if ($demoEnabled) {
         Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
         Save-DemoFrame $window '07-before-import.png'
+    }
+
+    $sampleControl = [NativeWindow]::GetDlgItem($window, 1009)
+    if ($sampleControl -eq [IntPtr]::Zero -or -not [NativeWindow]::IsWindowVisible($sampleControl)) {
+        throw 'The Save example CSV control is missing or hidden.'
+    }
+    $sampleCsv = Join-Path $isolated 'sample.csv'
+    if (-not [NativeWindow]::PostMessageW($sampleControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
+        throw 'Could not open the example CSV save dialog.'
+    }
+    $sampleDialog = Wait-Dialog '保存示例 CSV' $application.Id
+    Complete-FileDialog $sampleDialog $sampleCsv ''
+    for ($attempt = 0; $attempt -lt 40 -and -not (Test-Path -LiteralPath $sampleCsv); $attempt++) {
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-Path -LiteralPath $sampleCsv)) { throw 'The example CSV was not saved.' }
+    $expectedExample = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes(
+        (Resolve-Path -LiteralPath './docs/example.csv').Path))
+    $savedExample = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($sampleCsv))
+    if ($savedExample -ne $expectedExample) {
+        throw 'The saved example CSV differs from the bundled three-row example.'
     }
 
     $inputCsv = Join-Path $isolated 'phones.csv'
@@ -521,10 +680,45 @@ try {
     $openDialog = Wait-Dialog '选择手机号文件' $application.Id
     $openFrame = if ($demoEnabled) { '08-open-dialog.png' } else { '' }
     Complete-FileDialog $openDialog $inputCsv $openFrame
+    $exportControl = [NativeWindow]::GetDlgItem($window, 1008)
+    if ($exportControl -eq [IntPtr]::Zero) { throw 'The export button is missing.' }
+    for ($attempt = 0; $attempt -lt 200; $attempt++) {
+        $application.Refresh()
+        if ($application.HasExited) { throw 'The application exited while importing the CSV.' }
+        if ([NativeWindow]::IsWindowVisible($exportControl) -and
+            [NativeWindow]::IsWindowEnabled($exportControl)) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not [NativeWindow]::IsWindowVisible($exportControl)) {
+        throw "The export button did not become visible after 20 seconds. Progress: $(Read-WindowText $progressControl)"
+    }
+    if ([NativeWindow]::FindWindowW('#32770', '保存查询结果') -ne [IntPtr]::Zero -or
+        (Test-Path -LiteralPath $outputCsv) -or
+        @(Get-ChildItem -LiteralPath $isolated -Filter 'phones_归属地结果*' -File).Count -gt 0) {
+        throw 'Import opened the save dialog or wrote an output before the user requested export.'
+    }
+    Save-DemoFrame $window '09-ready-to-export.png'
+    if (-not [NativeWindow]::PostMessageW($exportControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
+        throw 'Could not open the result save dialog.'
+    }
+    $cancelDialog = Wait-Dialog '保存查询结果' $application.Id
+    [void][NativeWindow]::PostMessageW($cancelDialog, 0x0111, [IntPtr]2, [IntPtr]::Zero)
+    for ($attempt = 0; $attempt -lt 40 -and
+        [NativeWindow]::IsWindowVisible($cancelDialog); $attempt++) {
+        Start-Sleep -Milliseconds 50
+    }
+    if ([NativeWindow]::IsWindowVisible($cancelDialog)) {
+        throw 'The save dialog did not close when cancelled.'
+    }
+    if (-not [NativeWindow]::IsWindowVisible($exportControl)) {
+        throw 'Cancelling export removed the prepared result.'
+    }
+    if (-not [NativeWindow]::PostMessageW($exportControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
+        throw 'Could not reopen the result save dialog.'
+    }
     $saveDialog = Wait-Dialog '保存查询结果' $application.Id
-    $saveFrame = if ($demoEnabled) { '09-save-dialog.png' } else { '' }
+    $saveFrame = if ($demoEnabled) { '10-save-dialog.png' } else { '' }
     Complete-FileDialog $saveDialog $outputCsv $saveFrame
-
     for ($attempt = 0; $attempt -lt 200 -and -not (Test-Path -LiteralPath $outputCsv); $attempt++) {
         $application.Refresh()
         if ($application.HasExited) {
@@ -576,7 +770,7 @@ try {
         if (-not (Read-WindowText $progressControl).Contains('已保存')) {
             throw 'The batch completion status did not appear for the demo.'
         }
-        Save-DemoFrame $window '10-batch-complete.png'
+        Save-DemoFrame $window '11-batch-complete.png'
         Copy-Item -LiteralPath $outputCsv -Destination (Join-Path $DemoDirectory 'result.csv')
     }
     Write-Host 'Windows GUI smoke test passed, including a standalone EXE launch.'

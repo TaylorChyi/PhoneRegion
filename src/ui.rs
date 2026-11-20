@@ -12,6 +12,8 @@ use std::sync::{Arc, mpsc};
 mod dpi_tests;
 #[path = "ui/drawing.rs"]
 mod drawing;
+#[path = "ui/drop_files.rs"]
+mod drop_files;
 use drawing::Canvas;
 
 type Handle = *mut c_void;
@@ -33,12 +35,12 @@ const SWP_NOOWNERZORDER: u32 = 0x0200;
 const WS_SYSMENU: u32 = 0x00080000;
 const WS_MINIMIZEBOX: u32 = 0x00020000;
 const WS_VISIBLE: u32 = 0x10000000;
+const WS_CLIPCHILDREN: u32 = 0x02000000;
 const WS_CHILD: u32 = 0x40000000;
 const WS_TABSTOP: u32 = 0x00010000;
 const ES_AUTOHSCROLL: u32 = 0x0080;
 const BS_OWNERDRAW: u32 = 0x000B;
 const SS_LEFT: u32 = 0;
-const SS_RIGHT: u32 = 2;
 const SS_OWNERDRAW: u32 = 0x000D;
 const WM_CREATE: u32 = 0x0001;
 const WM_CLOSE: u32 = 0x0010;
@@ -67,6 +69,7 @@ const LR_SHARED: u32 = 0x8000;
 const VK_RETURN: usize = 13;
 const GWLP_USERDATA: i32 = -21;
 const SW_SHOW: i32 = 5;
+const SW_HIDE: i32 = 0;
 const MB_OK: u32 = 0;
 const MB_ICONERROR: u32 = 0x10;
 const MB_ICONINFORMATION: u32 = 0x40;
@@ -82,8 +85,9 @@ const ID_QUERY: i32 = 1002;
 const ID_IMPORT: i32 = 1003;
 const ID_RESULT: i32 = 1004;
 const ID_PROGRESS: i32 = 1005;
-const ID_RESULT_LABEL: i32 = 1006;
 const ID_CAVEAT: i32 = 1007;
+const ID_EXPORT: i32 = 1008;
+const ID_SAMPLE: i32 = 1009;
 const TIMER_WORK: usize = 1;
 const COLOR_WINDOW: i32 = 5;
 const COLOR_WINDOWTEXT: i32 = 8;
@@ -97,6 +101,7 @@ const SPI_GETWORKAREA: u32 = 0x0030;
 const HCF_HIGHCONTRASTON: u32 = 1;
 const RRF_RT_REG_DWORD: u32 = 0x00000018;
 const DT_VCENTER: u32 = 4;
+const DT_CENTER: u32 = 1;
 const DT_SINGLELINE: u32 = 0x20;
 const TRANSPARENT: i32 = 1;
 const ODS_SELECTED: u32 = 1;
@@ -248,6 +253,7 @@ unsafe extern "system" {
     fn DispatchMessageW(message: *const Message) -> Lresult;
     fn PostQuitMessage(code: i32);
     fn ShowWindow(hwnd: Hwnd, command: i32) -> i32;
+    fn IsWindowVisible(hwnd: Hwnd) -> i32;
     fn UpdateWindow(hwnd: Hwnd) -> i32;
     fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
     fn SetWindowTextW(hwnd: Hwnd, text: *const u16) -> i32;
@@ -294,17 +300,6 @@ unsafe extern "system" {
     fn SetScrollInfo(hwnd: Hwnd, bar: i32, info: *const ScrollInfo, redraw: i32) -> i32;
     fn GetScrollInfo(hwnd: Hwnd, bar: i32, info: *mut ScrollInfo) -> i32;
     fn ShowScrollBar(hwnd: Hwnd, bar: i32, show: i32) -> i32;
-    fn DrawIconEx(
-        dc: Handle,
-        x: i32,
-        y: i32,
-        icon: Handle,
-        width: i32,
-        height: i32,
-        frame: u32,
-        background: Handle,
-        flags: u32,
-    ) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -366,17 +361,15 @@ unsafe extern "system" {
 
 struct UiState {
     database: Arc<Database>,
-    brand: Hwnd,
-    offline: Hwnd,
     title: Hwnd,
-    subtitle: Hwnd,
     input: Hwnd,
     query: Hwnd,
     result: Hwnd,
-    result_label: Hwnd,
     caveat: Hwnd,
     progress: Hwnd,
     import: Hwnd,
+    export: Hwnd,
+    sample: Hwnd,
     font: Handle,
     title_font: Handle,
     input_font: Handle,
@@ -384,21 +377,43 @@ struct UiState {
     dpi: u32,
     scroll: i32,
     layout: Layout,
-    icon: Handle,
     result_view: Option<ResultView>,
-    result_error: bool,
+    result_note: &'static str,
     scroll_visible: bool,
     theme: Theme,
     busy: bool,
-    receiver: Option<mpsc::Receiver<Result<(PathBuf, batch::Summary), String>>>,
+    prepared: Option<Arc<batch::Prepared>>,
+    source_path: Option<PathBuf>,
+    receiver: Option<mpsc::Receiver<WorkerResult>>,
 }
 
-#[derive(Clone)]
+enum WorkerResult {
+    Imported(PathBuf, Result<batch::Prepared, String>),
+    Exported(Result<PathBuf, String>),
+}
+
+#[derive(Clone, PartialEq)]
 struct ResultView {
     carrier: String,
     province: String,
     city: String,
 }
+
+impl ResultView {
+    fn fields(view: Option<&Self>) -> [&str; 3] {
+        match view {
+            Some(view) => [&view.carrier, &view.province, &view.city],
+            None => ["—"; 3],
+        }
+    }
+
+    fn accessible_text(view: Option<&Self>) -> String {
+        let [carrier, province, city] = Self::fields(view);
+        format!("运营商 {carrier}\r\n省份 {province}\r\n地级市 {city}")
+    }
+}
+
+const CARRIER_NOTE: &str = "* 运营商为原号段信息。携号转网后，当前运营商可能不同。";
 
 #[derive(Clone, Copy, Default)]
 struct Layout {
@@ -410,29 +425,17 @@ struct Layout {
     status_y: f32,
     content_height: f32,
     columns: bool,
-    intro_extra: f32,
 }
 
 impl Layout {
-    fn new(window_width: f32, result: bool, error: bool) -> Self {
+    fn new(window_width: f32, export_visible: bool) -> Self {
         let margin = if window_width < 680.0 { 24.0 } else { 48.0 };
         let width = (window_width - 2.0 * margin).clamp(1.0, 1080.0);
         let columns = width >= 720.0;
-        let intro_extra = if width < 680.0 { 28.0 } else { 0.0 };
-        let result_y = 296.0 + intro_extra;
-        let result_height = if result {
-            if columns { 112.0 } else { 294.0 }
-        } else if error {
-            56.0
-        } else {
-            0.0
-        };
-        let batch_y = if result_height > 0.0 {
-            result_y + result_height + 43.0
-        } else {
-            338.0 + intro_extra
-        };
-        let status_y = batch_y + 91.0;
+        let result_y = 190.0;
+        let result_height = if columns { 112.0 } else { 294.0 };
+        let batch_y = result_y + result_height + 38.0;
+        let status_y = batch_y + 148.0;
         Self {
             margin,
             width,
@@ -440,9 +443,8 @@ impl Layout {
             result_height,
             batch_y,
             status_y,
-            content_height: status_y + 80.0,
+            content_height: status_y + if export_visible { 132.0 } else { 68.0 },
             columns,
-            intro_extra,
         }
     }
 }
@@ -678,9 +680,8 @@ unsafe fn reflow(hwnd: Hwnd) {
     }
     let dpi = unsafe { (*state).dpi };
     let width = client.right as f32 * 96.0 / dpi as f32;
-    let result = unsafe { (*state).result_view.is_some() };
-    let error = unsafe { (*state).result_error };
-    let layout = Layout::new(width, result, error);
+    let export_visible = unsafe { IsWindowVisible((*state).export) != 0 };
+    let layout = Layout::new(width, export_visible);
     let max_scroll = (pixels(layout.content_height, dpi) - client.bottom).max(0);
     let scroll = unsafe { (*state).scroll.clamp(0, max_scroll) };
     let visible = max_scroll > 0;
@@ -711,40 +712,12 @@ unsafe fn reflow(hwnd: Hwnd) {
     let left = layout.margin + ((width - 2.0 * layout.margin - layout.width).max(0.0) / 2.0);
     let full = layout.width;
     let content_scroll = scroll;
-    let extra = layout.intro_extra;
     unsafe {
-        place(
-            (*state).brand,
-            left + 36.0,
-            17.0,
-            220.0,
-            30.0,
-            dpi,
-            content_scroll,
-        );
-        place(
-            (*state).offline,
-            left + full - 160.0,
-            19.0,
-            160.0,
-            28.0,
-            dpi,
-            content_scroll,
-        );
-        place((*state).title, left, 88.0, full, 50.0, dpi, content_scroll);
-        place(
-            (*state).subtitle,
-            left,
-            142.0,
-            full,
-            31.0 + extra,
-            dpi,
-            content_scroll,
-        );
+        place((*state).title, left, 24.0, full, 50.0, dpi, content_scroll);
         place(
             (*state).input,
             left + 20.0,
-            208.0 + extra,
+            117.0,
             (full - 106.0).max(80.0),
             42.0,
             dpi,
@@ -753,18 +726,9 @@ unsafe fn reflow(hwnd: Hwnd) {
         place(
             (*state).query,
             left + full - 65.0,
-            204.0 + extra,
+            113.0,
             48.0,
             48.0,
-            dpi,
-            content_scroll,
-        );
-        place(
-            (*state).result_label,
-            left,
-            273.0 + extra,
-            full,
-            22.0,
             dpi,
             content_scroll,
         );
@@ -791,7 +755,16 @@ unsafe fn reflow(hwnd: Hwnd) {
             left,
             layout.batch_y,
             full,
-            72.0,
+            112.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).sample,
+            left + full - 164.0,
+            layout.batch_y + 115.0,
+            164.0,
+            29.0,
             dpi,
             content_scroll,
         );
@@ -801,6 +774,15 @@ unsafe fn reflow(hwnd: Hwnd) {
             layout.status_y,
             full,
             64.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).export,
+            left,
+            layout.status_y + 68.0,
+            full,
+            46.0,
             dpi,
             content_scroll,
         );
@@ -926,17 +908,71 @@ fn visible_output_path(path: &Path) -> String {
     format!("{start}…{end}")
 }
 
+fn save_sample(owner: Hwnd) -> Result<(), String> {
+    use std::io::Write;
+    let selected = unsafe {
+        choose_file(
+            owner,
+            true,
+            Some(Path::new("手机号示例.csv")),
+            1,
+            "保存示例 CSV",
+            "CSV 文件 (*.csv)\0*.csv\0",
+        )
+    };
+    let Some((mut path, _)) = selected else {
+        return Ok(());
+    };
+    if path.extension().is_none() {
+        path.set_extension("csv");
+    }
+    if !extension(&path).eq_ignore_ascii_case("csv") {
+        return Err("示例文件请选择 .csv 格式。".into());
+    }
+    let directory = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut output = tempfile::NamedTempFile::new_in(directory).map_err(|err| err.to_string())?;
+    output
+        .write_all(include_bytes!("../docs/example.csv"))
+        .map_err(|err| err.to_string())?;
+    output
+        .persist_noclobber(path)
+        .map_err(|err| format!("无法保存示例文件：{}", err.error))?;
+    Ok(())
+}
+
 unsafe fn file_dialog(
     owner: Hwnd,
     save: bool,
     suggested: Option<&Path>,
     preferred_filter: u32,
 ) -> Option<(PathBuf, u32)> {
-    let filter = if save {
-        wide("Excel 文件 (*.xlsx)\0*.xlsx\0CSV 文件 (*.csv)\0*.csv\0")
+    let (title, filter) = if save {
+        (
+            "保存查询结果",
+            "Excel 文件 (*.xlsx)\0*.xlsx\0CSV 文件 (*.csv)\0*.csv\0",
+        )
     } else {
-        wide("Excel 或 CSV 文件\0*.xlsx;*.xls;*.csv\0Excel 文件\0*.xlsx;*.xls\0CSV 文件\0*.csv\0")
+        (
+            "选择手机号文件",
+            "Excel 或 CSV 文件\0*.xlsx;*.xls;*.csv\0Excel 文件\0*.xlsx;*.xls\0CSV 文件\0*.csv\0",
+        )
     };
+    unsafe { choose_file(owner, save, suggested, preferred_filter, title, filter) }
+}
+
+unsafe fn choose_file(
+    owner: Hwnd,
+    save: bool,
+    suggested: Option<&Path>,
+    preferred_filter: u32,
+    title: &str,
+    filter: &str,
+) -> Option<(PathBuf, u32)> {
+    let title = wide(title);
+    let filter = wide(filter);
     let mut file = [0u16; 32768];
     if let Some(path) = suggested {
         let value: Vec<u16> = path
@@ -947,11 +983,6 @@ unsafe fn file_dialog(
         let count = value.len().min(file.len());
         file[..count].copy_from_slice(&value[..count]);
     }
-    let title = wide(if save {
-        "保存查询结果"
-    } else {
-        "选择手机号文件"
-    });
     let mut dialog = OpenFileName {
         size: std::mem::size_of::<OpenFileName>() as u32,
         owner,
@@ -998,6 +1029,115 @@ unsafe fn file_dialog(
         PathBuf::from(OsString::from_wide(&file[..len])),
         dialog.filter_index,
     ))
+}
+
+unsafe fn begin_import(hwnd: Hwnd, state: *mut UiState, selected: Option<PathBuf>) {
+    unsafe {
+        if (*state).busy {
+            return;
+        }
+        (*state).busy = true;
+        let input = match selected.or_else(|| file_dialog(hwnd, false, None, 1).map(|item| item.0))
+        {
+            Some(path) => path,
+            None => {
+                (*state).busy = false;
+                return;
+            }
+        };
+        if !drop_files::supported_input(&input) || !input.is_file() {
+            set_text((*state).progress, "请选择一个 .xls、.xlsx 或 .csv 文件。");
+            alert(hwnd, "请选择一个 .xls、.xlsx 或 .csv 文件。", true);
+            (*state).busy = false;
+            return;
+        }
+        (*state).prepared = None;
+        (*state).source_path = None;
+        ShowWindow((*state).export, SW_HIDE);
+        EnableWindow((*state).import, 0);
+        set_text((*state).progress, "正在读取并查询，请稍候…");
+        reflow(hwnd);
+        let database = Arc::clone(&(*state).database);
+        let (sender, receiver) = mpsc::channel();
+        (*state).receiver = Some(receiver);
+        std::thread::spawn(move || {
+            let result = batch::prepare(&input, &database);
+            let _ = sender.send(WorkerResult::Imported(input, result));
+        });
+        SetTimer(hwnd, TIMER_WORK, 100, null_mut());
+    }
+}
+
+fn handle_drop(hwnd: Hwnd, choice: drop_files::DropChoice) {
+    let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
+    if state.is_null() || unsafe { (*state).busy } {
+        return;
+    }
+    match choice {
+        drop_files::DropChoice::File(path) => unsafe { begin_import(hwnd, state, Some(path)) },
+        drop_files::DropChoice::Error(reason) => unsafe {
+            set_text((*state).progress, reason);
+            alert(hwnd, reason, true);
+        },
+    }
+}
+
+unsafe fn begin_export(hwnd: Hwnd, state: *mut UiState) {
+    unsafe {
+        if (*state).busy {
+            return;
+        }
+        let Some(prepared) = (*state).prepared.as_ref().cloned() else {
+            return;
+        };
+        let Some(source) = (*state).source_path.clone() else {
+            return;
+        };
+        (*state).busy = true;
+        let default = source.with_file_name(format!(
+            "{}_归属地结果",
+            source.file_stem().unwrap_or_default().to_string_lossy()
+        ));
+        let preferred_filter = if extension(&source).eq_ignore_ascii_case("csv") {
+            2
+        } else {
+            1
+        };
+        let (mut output, selected_filter) =
+            match file_dialog(hwnd, true, Some(&default), preferred_filter) {
+                Some(selection) => selection,
+                None => {
+                    (*state).busy = false;
+                    return;
+                }
+            };
+        if output.extension().is_none() {
+            output.set_extension(if selected_filter == 2 { "csv" } else { "xlsx" });
+        }
+        if !matches!(
+            extension(&output).to_ascii_lowercase().as_str(),
+            "csv" | "xlsx"
+        ) {
+            alert(hwnd, "结果文件请选择 .xlsx 或 .csv 格式。", true);
+            (*state).busy = false;
+            return;
+        }
+        if output.exists() || output == source {
+            alert(hwnd, "目标文件已经存在，请另选文件名。", true);
+            (*state).busy = false;
+            return;
+        }
+        EnableWindow((*state).import, 0);
+        EnableWindow((*state).export, 0);
+        set_text((*state).progress, "正在保存结果，请稍候…");
+        let (sender, receiver) = mpsc::channel();
+        (*state).receiver = Some(receiver);
+        std::thread::spawn(move || {
+            let result = batch::export_prepared(&prepared, &output).map(|()| output);
+            let _ = sender.send(WorkerResult::Exported(result));
+        });
+        SetTimer(hwnd, TIMER_WORK, 100, null_mut());
+    }
 }
 
 unsafe extern "system" fn window_proc(
@@ -1047,24 +1187,6 @@ unsafe extern "system" fn window_proc(
                     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon as isize);
                 }
 
-                let brand = create_control(
-                    hwnd,
-                    "STATIC",
-                    "PhoneRegion",
-                    SS_LEFT,
-                    0,
-                    [0, 0, 1, 1],
-                    font,
-                );
-                let offline = create_control(
-                    hwnd,
-                    "STATIC",
-                    "离线 · 本机查询",
-                    SS_RIGHT,
-                    0,
-                    [0, 0, 1, 1],
-                    small_font,
-                );
                 let title = create_control(
                     hwnd,
                     "STATIC",
@@ -1073,15 +1195,6 @@ unsafe extern "system" fn window_proc(
                     0,
                     [0, 0, 1, 1],
                     title_font,
-                );
-                let subtitle = create_control(
-                    hwnd,
-                    "STATIC",
-                    "输入中国大陆手机号，查看号段对应的运营商、省份和地级市",
-                    SS_LEFT,
-                    0,
-                    [0, 0, 1, 1],
-                    font,
                 );
                 let input = create_control(
                     hwnd,
@@ -1096,7 +1209,7 @@ unsafe extern "system" fn window_proc(
                     input,
                     EM_SETCUEBANNER,
                     1,
-                    wide("输入或粘贴手机号").as_ptr() as isize,
+                    wide("例如：+86 132 1300 0000").as_ptr() as isize,
                 );
                 let query = create_control(
                     hwnd,
@@ -1107,19 +1220,10 @@ unsafe extern "system" fn window_proc(
                     [0, 0, 1, 1],
                     input_font,
                 );
-                let result_label = create_control(
-                    hwnd,
-                    "STATIC",
-                    "",
-                    SS_LEFT,
-                    ID_RESULT_LABEL,
-                    [0, 0, 1, 1],
-                    small_font,
-                );
                 let result = create_control(
                     hwnd,
                     "STATIC",
-                    "",
+                    &ResultView::accessible_text(None),
                     SS_OWNERDRAW,
                     ID_RESULT,
                     [0, 0, 1, 1],
@@ -1129,7 +1233,7 @@ unsafe extern "system" fn window_proc(
                     hwnd,
                     "STATIC",
                     "",
-                    SS_LEFT,
+                    SS_OWNERDRAW,
                     ID_CAVEAT,
                     [0, 0, 1, 1],
                     small_font,
@@ -1137,7 +1241,7 @@ unsafe extern "system" fn window_proc(
                 let import = create_control(
                     hwnd,
                     "BUTTON",
-                    "导入 Excel / CSV",
+                    "点击或拖入文件",
                     WS_TABSTOP | BS_OWNERDRAW,
                     ID_IMPORT,
                     [0, 0, 1, 1],
@@ -1152,19 +1256,36 @@ unsafe extern "system" fn window_proc(
                     [0, 0, 1, 1],
                     small_font,
                 );
+                let export = create_control(
+                    hwnd,
+                    "BUTTON",
+                    "导出结果",
+                    WS_TABSTOP | BS_OWNERDRAW,
+                    ID_EXPORT,
+                    [0, 0, 1, 1],
+                    font,
+                );
+                ShowWindow(export, SW_HIDE);
+                let sample = create_control(
+                    hwnd,
+                    "BUTTON",
+                    "保存示例 CSV",
+                    WS_TABSTOP | BS_OWNERDRAW,
+                    ID_SAMPLE,
+                    [0, 0, 1, 1],
+                    small_font,
+                );
                 let state = Box::new(UiState {
                     database,
-                    brand,
-                    offline,
                     title,
-                    subtitle,
                     input,
                     query,
                     result,
-                    result_label,
                     caveat,
                     progress,
                     import,
+                    export,
+                    sample,
                     font,
                     title_font,
                     input_font,
@@ -1172,15 +1293,20 @@ unsafe extern "system" fn window_proc(
                     dpi,
                     scroll: 0,
                     layout: Layout::default(),
-                    icon,
                     result_view: None,
-                    result_error: false,
+                    result_note: "",
                     scroll_visible: false,
                     theme,
                     busy: false,
+                    prepared: None,
+                    source_path: None,
                     receiver: None,
                 });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+                if let Err(reason) = drop_files::install(import, hwnd) {
+                    alert(hwnd, &reason, true);
+                    return -1;
+                }
                 reflow(hwnd);
                 SetFocus(input);
             }
@@ -1194,168 +1320,103 @@ unsafe extern "system" fn window_proc(
             }
             let input_changed = id == ID_INPUT && (wparam >> 16) == EN_CHANGE;
             match id {
+                ID_SAMPLE => {
+                    if let Err(reason) = save_sample(hwnd) {
+                        unsafe { alert(hwnd, &reason, true) };
+                    }
+                }
                 ID_INPUT | ID_QUERY if input_changed || id == ID_QUERY => {
-                    let input_hwnd = unsafe { (*state_ptr).input };
-                    let result_hwnd = unsafe { (*state_ptr).result };
-                    let label_hwnd = unsafe { (*state_ptr).result_label };
-                    let caveat_hwnd = unsafe { (*state_ptr).caveat };
-                    let database = unsafe { Arc::clone(&(*state_ptr).database) };
-                    let input = unsafe { text_of(input_hwnd) };
-                    let found = database.lookup(&input);
-                    let success = found.status == Status::Found;
-                    let view = if success {
-                        Some(ResultView {
-                            carrier: found.carrier.clone(),
-                            province: found.province.clone(),
-                            city: if found.city.is_empty() {
-                                "离线库未提供唯一地市".to_string()
-                            } else {
-                                found.city.clone()
-                            },
-                        })
-                    } else {
-                        None
+                    let input = unsafe { text_of((*state_ptr).input) };
+                    let found = unsafe { (*state_ptr).database.lookup(&input) };
+                    let note = match found.status {
+                        Status::Found => CARRIER_NOTE,
+                        Status::Missing => "离线号段库未收录该号码前 7 位。",
+                        Status::Invalid if !input_changed => "请输入 11 位中国大陆手机号。",
+                        Status::Empty if !input_changed => "请输入手机号。",
+                        _ => "",
                     };
-                    let detail = match found.status {
-                        Status::Found => format!(
-                            "运营商 {}\r\n省份 {}\r\n地级市 {}",
-                            found.carrier,
-                            found.province,
-                            if found.city.is_empty() {
-                                "离线库未提供唯一地市"
-                            } else {
-                                &found.city
-                            }
-                        ),
-                        Status::Invalid if input_changed => String::new(),
-                        Status::Invalid => "请输入 11 位中国大陆手机号。".to_string(),
-                        Status::Missing => "离线号段库未收录该号码前 7 位。".to_string(),
-                        Status::Empty if input_changed => String::new(),
-                        Status::Empty => "请输入手机号。".to_string(),
-                    };
-                    unsafe {
-                        (*state_ptr).result_view = view;
-                        (*state_ptr).result_error = !success && !detail.is_empty();
-                    }
-                    unsafe {
-                        set_text(label_hwnd, if success { "查询结果" } else { "" });
-                        set_text(result_hwnd, &detail);
-                        set_text(
-                            caveat_hwnd,
-                            if success {
-                                "运营商为原号段信息。携号转网后，当前运营商可能不同。"
-                            } else {
-                                ""
-                            },
-                        );
-                        reflow(hwnd);
-                    }
-                }
-                ID_IMPORT if !unsafe { (*state_ptr).busy } => {
-                    unsafe { (*state_ptr).busy = true };
-                    let input = match unsafe { file_dialog(hwnd, false, None, 1) } {
-                        Some((input, _)) => input,
-                        None => {
-                            unsafe { (*state_ptr).busy = false };
-                            return 0;
-                        }
-                    };
-                    let suffix = if extension(&input).eq_ignore_ascii_case("csv") {
-                        "csv"
-                    } else {
-                        "xlsx"
-                    };
-                    let default = input.with_file_name(format!(
-                        "{}_归属地结果",
-                        input.file_stem().unwrap_or_default().to_string_lossy()
-                    ));
-                    let preferred_filter = if suffix == "csv" { 2 } else { 1 };
-                    let (mut output, selected_filter) = match unsafe {
-                        file_dialog(hwnd, true, Some(&default), preferred_filter)
-                    } {
-                        Some(selection) => selection,
-                        None => {
-                            unsafe { (*state_ptr).busy = false };
-                            return 0;
-                        }
-                    };
-                    if output.extension().is_none() {
-                        output.set_extension(if selected_filter == 2 { "csv" } else { "xlsx" });
-                    }
-                    let output_suffix = extension(&output).to_ascii_lowercase();
-                    if output_suffix != "csv" && output_suffix != "xlsx" {
-                        unsafe { (*state_ptr).busy = false };
-                        unsafe {
-                            alert(hwnd, "结果文件请选择 .xlsx 或 .csv 格式。", true)
-                        };
-                        return 0;
-                    }
-                    if output.exists() || input == output {
-                        unsafe { (*state_ptr).busy = false };
-                        unsafe {
-                            alert(hwnd, "目标文件已经存在，请另选文件名。", true)
-                        };
-                        return 0;
-                    }
-                    let db = unsafe { Arc::clone(&(*state_ptr).database) };
-                    let (tx, rx) = mpsc::channel();
-                    std::thread::spawn(move || {
-                        let result =
-                            batch::convert(&input, &output, &db).map(|summary| (output, summary));
-                        let _ = tx.send(result);
+                    let view = (found.status == Status::Found).then(|| ResultView {
+                        carrier: found.carrier,
+                        province: found.province,
+                        city: if found.city.is_empty() {
+                            "离线库未提供唯一地市".to_string()
+                        } else {
+                            found.city
+                        },
                     });
-                    let import_hwnd = unsafe { (*state_ptr).import };
-                    let progress_hwnd = unsafe { (*state_ptr).progress };
-                    unsafe { (*state_ptr).receiver = Some(rx) };
                     unsafe {
-                        EnableWindow(import_hwnd, 0);
-                        set_text(progress_hwnd, "正在查询，请稍候…");
-                        SetTimer(hwnd, TIMER_WORK, 100, null_mut());
+                        if (*state_ptr).result_view != view {
+                            let text = ResultView::accessible_text(view.as_ref());
+                            (*state_ptr).result_view = view;
+                            set_text((*state_ptr).result, &text);
+                            InvalidateRect((*state_ptr).result, null(), 0);
+                        }
+                        if (*state_ptr).result_note != note {
+                            (*state_ptr).result_note = note;
+                            set_text((*state_ptr).caveat, note);
+                            InvalidateRect((*state_ptr).caveat, null(), 0);
+                        }
                     }
                 }
+                ID_IMPORT => unsafe { begin_import(hwnd, state_ptr, None) },
+                ID_EXPORT => unsafe { begin_export(hwnd, state_ptr) },
                 _ => {}
             }
             0
         }
         WM_TIMER if wparam == TIMER_WORK => {
-            let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
-            if state_ptr.is_null() {
+            let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
+            if state.is_null() {
                 return 0;
             }
-            let result =
-                unsafe { (*state_ptr).receiver.as_ref() }.and_then(|rx| match rx.try_recv() {
-                    Ok(result) => Some(result),
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        Some(Err("后台处理意外中断，请重试。".to_string()))
-                    }
-                    Err(mpsc::TryRecvError::Empty) => None,
-                });
+            let result = unsafe { (*state).receiver.as_ref() }.and_then(|receiver| match receiver
+                .try_recv()
+            {
+                Ok(result) => Some(Ok(result)),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("后台处理意外中断，请重试。".to_string()))
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+            });
             if let Some(result) = result {
-                let import_hwnd = unsafe { (*state_ptr).import };
-                let progress_hwnd = unsafe { (*state_ptr).progress };
                 unsafe {
-                    (*state_ptr).receiver = None;
-                    (*state_ptr).busy = false
-                };
-                unsafe {
+                    (*state).receiver = None;
+                    (*state).busy = false;
                     KillTimer(hwnd, TIMER_WORK);
-                    EnableWindow(import_hwnd, 1);
+                    EnableWindow((*state).import, 1);
+                    EnableWindow((*state).export, 1);
                 }
                 match result {
-                    Ok((path, summary)) => {
+                    Ok(WorkerResult::Imported(source, Ok(prepared))) => {
+                        let summary = prepared.summary;
                         let detail = format!(
-                            "已保存：{}\r\n共 {} 行，查到 {} 行；格式错误 {} 行，未收录 {} 行，空行 {} 行。",
-                            visible_output_path(&path),
+                            "已查询 {} 行，查到 {} 行；格式错误 {} 行，未收录 {} 行，空行 {} 行。点击“导出结果”保存。",
                             summary.rows,
                             summary.found,
                             summary.invalid,
                             summary.missing,
                             summary.empty
                         );
-                        unsafe { set_text(progress_hwnd, &detail) };
+                        unsafe {
+                            (*state).prepared = Some(Arc::new(prepared));
+                            (*state).source_path = Some(source);
+                            set_text((*state).progress, &detail);
+                            ShowWindow((*state).export, SW_SHOW);
+                            reflow(hwnd);
+                        }
                     }
-                    Err(reason) => unsafe {
-                        set_text(progress_hwnd, "处理失败。可检查文件后重试。");
+                    Ok(WorkerResult::Imported(_, Err(reason))) => unsafe {
+                        set_text((*state).progress, "导入失败。请检查文件后重试。");
+                        alert(hwnd, &reason, true);
+                    },
+                    Ok(WorkerResult::Exported(Ok(path))) => unsafe {
+                        set_text(
+                            (*state).progress,
+                            &format!("已保存：{}", visible_output_path(&path)),
+                        );
+                    },
+                    Ok(WorkerResult::Exported(Err(reason))) | Err(reason) => unsafe {
+                        set_text((*state).progress, "处理失败。可重试导入或导出。");
                         alert(hwnd, &reason, true);
                     },
                 }
@@ -1372,7 +1433,6 @@ unsafe extern "system" fn window_proc(
             let layout = unsafe { (*state).layout };
             let dpi = unsafe { (*state).dpi };
             let scroll = unsafe { (*state).scroll } as f32 * 96.0 / dpi as f32;
-            let icon = unsafe { (*state).icon };
             let mut rect = Rect {
                 left: 0,
                 top: 0,
@@ -1382,38 +1442,8 @@ unsafe extern "system" fn window_proc(
             unsafe {
                 GetClientRect(hwnd, &mut rect);
                 FillRect(wparam as Handle, &rect, brush);
-                if !icon.is_null() {
-                    DrawIconEx(
-                        wparam as Handle,
-                        pixels(
-                            layout.margin
-                                + ((rect.right as f32 * 96.0 / dpi as f32
-                                    - 2.0 * layout.margin
-                                    - layout.width)
-                                    .max(0.0)
-                                    / 2.0),
-                            dpi,
-                        ),
-                        pixels(20.0 - scroll, dpi),
-                        icon,
-                        pixels(24.0, dpi),
-                        pixels(24.0, dpi),
-                        0,
-                        null_mut(),
-                        3,
-                    );
-                }
             }
             if let Ok(canvas) = Canvas::new(wparam as Handle, dpi) {
-                let client_width = rect.right as f32 * 96.0 / dpi as f32;
-                let _ = canvas.line(
-                    0.0,
-                    65.0 - scroll,
-                    client_width,
-                    65.0 - scroll,
-                    1.0,
-                    rgb(colors.border),
-                );
                 let _ = canvas.fill_round_rect(
                     layout.margin
                         + ((rect.right as f32 * 96.0 / dpi as f32
@@ -1421,7 +1451,7 @@ unsafe extern "system" fn window_proc(
                             - layout.width)
                             .max(0.0)
                             / 2.0),
-                    190.0 + layout.intro_extra - scroll,
+                    99.0 - scroll,
                     layout.width,
                     72.0,
                     18.0,
@@ -1434,7 +1464,7 @@ unsafe extern "system" fn window_proc(
                             - layout.width)
                             .max(0.0)
                             / 2.0),
-                    190.0 + layout.intro_extra - scroll,
+                    99.0 - scroll,
                     layout.width,
                     72.0,
                     18.0,
@@ -1454,10 +1484,7 @@ unsafe extern "system" fn window_proc(
             let field_brush = unsafe { (*state).theme.field_brush };
             let edit = msg == WM_CTLCOLOREDIT;
             let secondary = !edit
-                && (lparam as Hwnd == unsafe { (*state).offline }
-                    || lparam as Hwnd == unsafe { (*state).subtitle }
-                    || lparam as Hwnd == unsafe { (*state).result_label }
-                    || lparam as Hwnd == unsafe { (*state).caveat }
+                && (lparam as Hwnd == unsafe { (*state).caveat }
                     || lparam as Hwnd == unsafe { (*state).progress });
             unsafe {
                 SetTextColor(
@@ -1482,7 +1509,16 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             let item = unsafe { *(lparam as *const DrawItem) };
-            if ![ID_QUERY as u32, ID_IMPORT as u32, ID_RESULT as u32].contains(&item.control_id) {
+            if ![
+                ID_QUERY as u32,
+                ID_IMPORT as u32,
+                ID_RESULT as u32,
+                ID_CAVEAT as u32,
+                ID_EXPORT as u32,
+                ID_SAMPLE as u32,
+            ]
+            .contains(&item.control_id)
+            {
                 return 0;
             }
             let colors = unsafe { (*state).theme.colors };
@@ -1490,7 +1526,6 @@ unsafe extern "system" fn window_proc(
             let font = unsafe { (*state).font };
             let small_font = unsafe { (*state).small_font };
             let input_font = unsafe { (*state).input_font };
-            let result = unsafe { (*state).result_view.clone() };
             let columns = unsafe { (*state).layout.columns };
             let high_contrast = unsafe { (*state).theme.high_contrast };
             let w = (item.rect.right - item.rect.left) as f32 * 96.0 / dpi as f32;
@@ -1548,14 +1583,14 @@ unsafe extern "system" fn window_proc(
                             colors.field
                         };
                         let _ =
-                            canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 15.0, rgb(surface));
+                            canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 16.0, rgb(surface));
                         let _ = canvas.stroke_round_rect(
                             1.0,
                             1.0,
                             w - 2.0,
                             h - 2.0,
-                            15.0,
-                            if focused { 2.0 } else { 1.0 },
+                            16.0,
+                            if focused || selected { 2.0 } else { 1.0 },
                             rgb(if focused { colors.text } else { colors.border }),
                         );
                         let icon_ink = if disabled {
@@ -1563,124 +1598,217 @@ unsafe extern "system" fn window_proc(
                         } else {
                             colors.text
                         };
-                        let _ = canvas.stroke_round_rect(
-                            19.0,
-                            19.0,
-                            32.0,
-                            32.0,
-                            9.0,
-                            1.2,
-                            rgb(colors.border),
-                        );
-                        let _ = canvas.line(35.0, 28.0, 35.0, 42.0, 2.2, rgb(icon_ink));
-                        let _ = canvas.line(28.0, 35.0, 42.0, 35.0, 2.2, rgb(icon_ink));
-                        let _ = canvas.line(w - 37.0, 30.0, w - 31.0, 36.0, 2.0, rgb(icon_ink));
-                        let _ = canvas.line(w - 31.0, 36.0, w - 37.0, 42.0, 2.0, rgb(icon_ink));
+                        let cx = w / 2.0;
+                        let _ = canvas.line(cx, 16.0, cx, 36.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(cx - 6.0, 22.0, cx, 16.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(cx, 16.0, cx + 6.0, 22.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(cx - 13.0, 31.0, cx - 13.0, 41.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(cx - 13.0, 41.0, cx + 13.0, 41.0, 2.0, rgb(icon_ink));
+                        let _ = canvas.line(cx + 13.0, 41.0, cx + 13.0, 31.0, 2.0, rgb(icon_ink));
                         unsafe {
                             draw_text(
                                 item.dc,
-                                "导入 Excel 或 CSV 文件",
+                                if disabled {
+                                    "正在处理文件…"
+                                } else {
+                                    "点击或拖入文件"
+                                },
                                 font,
                                 icon_ink,
-                                [64.0, 11.0, w - 112.0, 27.0],
+                                [20.0, 49.0, w - 40.0, 29.0],
                                 dpi,
-                                DT_SINGLELINE | DT_VCENTER,
+                                DT_SINGLELINE | DT_VCENTER | DT_CENTER,
                             );
                             draw_text(
                                 item.dc,
-                                if w < 680.0 {
-                                    "首列手机号 → Excel 或 CSV 结果"
-                                } else {
-                                    "读取首列手机号，结果另存为 Excel 或 CSV"
-                                },
+                                "Excel（.xls、.xlsx）或 CSV",
                                 small_font,
                                 colors.muted,
-                                [64.0, 38.0, w - 112.0, 25.0],
+                                [20.0, 76.0, w - 40.0, 24.0],
+                                dpi,
+                                DT_SINGLELINE | DT_VCENTER | DT_CENTER,
+                            );
+                        }
+                    }
+                    ID_EXPORT => {
+                        let fill = if disabled || selected {
+                            colors.field
+                        } else {
+                            colors.accent
+                        };
+                        let ink = if disabled {
+                            colors.disabled
+                        } else if selected {
+                            colors.text
+                        } else {
+                            colors.accent_text
+                        };
+                        let _ = canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 14.0, rgb(fill));
+                        if disabled || selected || focused {
+                            let _ = canvas.stroke_round_rect(
+                                1.0,
+                                1.0,
+                                w - 2.0,
+                                h - 2.0,
+                                14.0,
+                                if focused { 2.0 } else { 1.0 },
+                                rgb(colors.text),
+                            );
+                        }
+                        unsafe {
+                            draw_text(
+                                item.dc,
+                                "导出结果",
+                                font,
+                                ink,
+                                [12.0, 0.0, w - 24.0, h],
+                                dpi,
+                                DT_SINGLELINE | DT_VCENTER | DT_CENTER,
+                            );
+                        }
+                    }
+                    ID_SAMPLE => {
+                        let ink = if disabled {
+                            colors.disabled
+                        } else {
+                            colors.muted
+                        };
+                        if selected || focused {
+                            let _ = canvas.stroke_round_rect(
+                                1.0,
+                                1.0,
+                                w - 2.0,
+                                h - 2.0,
+                                8.0,
+                                if focused { 2.0 } else { 1.0 },
+                                rgb(colors.border),
+                            );
+                        }
+                        unsafe {
+                            draw_text(
+                                item.dc,
+                                "保存示例 CSV",
+                                small_font,
+                                ink,
+                                [4.0, 0.0, w - 8.0, h],
+                                dpi,
+                                DT_SINGLELINE | DT_VCENTER | DT_CENTER,
+                            );
+                        }
+                    }
+                    ID_CAVEAT => {
+                        let note = unsafe { (*state).result_note };
+                        let highlighted = note == CARRIER_NOTE && !high_contrast;
+                        let mut inset = 0.0;
+                        let mut ink = colors.muted;
+                        if highlighted {
+                            // The icon's EE yellow (#F8FF19) needs a dark backing on a light surface.
+                            ink = 0x0019FFF8;
+                            if colors.surface == colors_for_mode(false).surface {
+                                inset = 8.0;
+                                let mut measured = item.rect;
+                                unsafe {
+                                    let previous = SelectObject(item.dc, small_font);
+                                    DrawTextW(
+                                        item.dc,
+                                        wide(note).as_ptr(),
+                                        -1,
+                                        &mut measured,
+                                        DT_SINGLELINE | DT_NOPREFIX | 0x0400, /* DT_CALCRECT */
+                                    );
+                                    SelectObject(item.dc, previous);
+                                }
+                                let text_width =
+                                    (measured.right - measured.left) as f32 * 96.0 / dpi as f32;
+                                let _ = canvas.fill_round_rect(
+                                    0.0,
+                                    1.0,
+                                    (text_width + inset * 2.0).min(w),
+                                    h - 2.0,
+                                    6.0,
+                                    0x272722,
+                                );
+                            }
+                        }
+                        unsafe {
+                            draw_text(
+                                item.dc,
+                                note,
+                                small_font,
+                                ink,
+                                [inset, 0.0, w - inset, h],
                                 dpi,
                                 DT_SINGLELINE | DT_VCENTER,
                             );
                         }
                     }
                     ID_RESULT => {
-                        if let Some(view) = result {
-                            let _ = canvas.fill_round_rect(
-                                1.0,
-                                1.0,
-                                w - 2.0,
-                                h - 2.0,
-                                16.0,
-                                rgb(colors.field),
-                            );
-                            let _ = canvas.stroke_round_rect(
-                                1.0,
-                                1.0,
-                                w - 2.0,
-                                h - 2.0,
-                                16.0,
-                                1.0,
-                                rgb(colors.border),
-                            );
-                            if columns {
-                                let step = (w - 40.0) / 3.0;
-                                for index in [1.0, 2.0] {
-                                    let divider = 20.0 + step * index - 9.0;
-                                    let _ = canvas.line(
-                                        divider,
-                                        23.0,
-                                        divider,
-                                        89.0,
-                                        1.0,
-                                        rgb(colors.border),
-                                    );
-                                }
+                        let result = unsafe { (*state).result_view.clone() };
+                        let [carrier, province, city] = ResultView::fields(result.as_ref());
+                        let _ = canvas.fill_round_rect(
+                            1.0,
+                            1.0,
+                            w - 2.0,
+                            h - 2.0,
+                            16.0,
+                            rgb(colors.field),
+                        );
+                        let _ = canvas.stroke_round_rect(
+                            1.0,
+                            1.0,
+                            w - 2.0,
+                            h - 2.0,
+                            16.0,
+                            1.0,
+                            rgb(colors.border),
+                        );
+                        if columns {
+                            let step = (w - 40.0) / 3.0;
+                            for index in [1.0, 2.0] {
+                                let divider = 20.0 + step * index - 9.0;
+                                let _ = canvas.line(
+                                    divider,
+                                    23.0,
+                                    divider,
+                                    89.0,
+                                    1.0,
+                                    rgb(colors.border),
+                                );
                             }
-                            let entries = [
-                                ("运营商", view.carrier),
-                                ("归属地省份", view.province),
-                                ("归属地地级市", view.city),
-                            ];
-                            for (index, (label, value)) in entries.iter().enumerate() {
-                                let (x, y, cell_w) = if columns {
-                                    (
-                                        20.0 + index as f32 * (w - 40.0) / 3.0,
-                                        17.0,
-                                        (w - 40.0) / 3.0 - 16.0,
-                                    )
-                                } else {
-                                    (20.0, 14.0 + index as f32 * 92.0, w - 40.0)
-                                };
-                                unsafe {
-                                    draw_text(
-                                        item.dc,
-                                        label,
-                                        small_font,
-                                        colors.muted,
-                                        [x, y, cell_w, 22.0],
-                                        dpi,
-                                        DT_SINGLELINE | DT_VCENTER,
-                                    );
-                                    draw_text(
-                                        item.dc,
-                                        value,
-                                        input_font,
-                                        colors.text,
-                                        [x, y + 27.0, cell_w, 67.0],
-                                        dpi,
-                                        DT_WORDBREAK,
-                                    );
-                                }
-                            }
-                        } else {
-                            let message = unsafe { text_of(item.hwnd) };
+                        }
+                        let entries = [
+                            ("运营商", carrier),
+                            ("归属地省份", province),
+                            ("归属地地级市", city),
+                        ];
+                        for (index, (label, value)) in entries.iter().enumerate() {
+                            let (x, y, cell_w) = if columns {
+                                (
+                                    20.0 + index as f32 * (w - 40.0) / 3.0,
+                                    17.0,
+                                    (w - 40.0) / 3.0 - 16.0,
+                                )
+                            } else {
+                                (20.0, 14.0 + index as f32 * 92.0, w - 40.0)
+                            };
                             unsafe {
                                 draw_text(
                                     item.dc,
-                                    &message,
-                                    font,
-                                    colors.text,
-                                    [0.0, 0.0, w, h],
+                                    label,
+                                    small_font,
+                                    colors.muted,
+                                    [x, y, cell_w, 22.0],
                                     dpi,
-                                    DT_WORDBREAK | DT_NOPREFIX,
+                                    DT_SINGLELINE | DT_VCENTER,
+                                );
+                                draw_text(
+                                    item.dc,
+                                    value,
+                                    input_font,
+                                    colors.text,
+                                    [x, y + 27.0, cell_w, 67.0],
+                                    dpi,
+                                    DT_WORDBREAK,
                                 );
                             }
                         }
@@ -1722,17 +1850,15 @@ unsafe extern "system" fn window_proc(
             }
             let controls = unsafe {
                 [
-                    (*state).brand,
-                    (*state).offline,
                     (*state).title,
-                    (*state).subtitle,
                     (*state).input,
                     (*state).query,
-                    (*state).result_label,
                     (*state).result,
                     (*state).caveat,
                     (*state).import,
                     (*state).progress,
+                    (*state).export,
+                    (*state).sample,
                 ]
             };
             let old_fonts = unsafe {
@@ -1752,9 +1878,9 @@ unsafe extern "system" fn window_proc(
                 (*state).scroll = 0;
                 for (index, control) in controls.into_iter().enumerate() {
                     let font = match index {
-                        2 => new_fonts[1],
-                        4 | 5 | 7 => new_fonts[2],
-                        1 | 6 | 8 | 10 => new_fonts[3],
+                        0 => new_fonts[1],
+                        1..=3 => new_fonts[2],
+                        4 | 6 | 8 => new_fonts[3],
                         _ => new_fonts[0],
                     };
                     SendMessageW(control, WM_SETFONT, font as usize, 0);
@@ -1771,7 +1897,6 @@ unsafe extern "system" fn window_proc(
                     LR_SHARED,
                 );
                 if !icon.is_null() {
-                    (*state).icon = icon;
                     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon as isize);
                 }
                 if lparam != 0 {
@@ -1918,16 +2043,17 @@ unsafe fn create_main_window() -> Result<Hwnd, String> {
         if RegisterClassW(&class) == 0 {
             return Err("无法注册窗口".to_string());
         }
-        let title = wide("手机号归属地 · 离线查询");
+        let title = wide("PhoneRegion");
         let available = work_area();
         let system_dpi = system_dpi().max(96);
         let width = pixels(960.0, system_dpi).min(available.right - available.left);
-        let height = pixels(700.0, system_dpi).min(available.bottom - available.top);
+        let height = pixels(636.0, system_dpi).min(available.bottom - available.top);
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(),
             title.as_ptr(),
             WS_CAPTION
+                | WS_CLIPCHILDREN
                 | WS_SYSMENU
                 | WS_MINIMIZEBOX
                 | WS_MAXIMIZEBOX

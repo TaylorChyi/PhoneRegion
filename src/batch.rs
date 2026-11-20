@@ -21,20 +21,18 @@ pub struct Summary {
     pub empty: usize,
 }
 
-pub fn convert(input: &Path, output: &Path, db: &Database) -> Result<Summary, String> {
+pub struct Prepared {
+    pub summary: Summary,
+    rows: Vec<[String; 4]>,
+}
+
+pub fn prepare(input: &Path, db: &Database) -> Result<Prepared, String> {
     if !input.is_file() {
         return Err("找不到输入文件".into());
     }
-    if output.exists() {
-        return Err("输出文件已存在，请选择另一个文件名".into());
-    }
     let source_type = extension(input);
-    let target_type = extension(output);
     if !matches!(source_type.as_str(), "xls" | "xlsx" | "csv") {
         return Err("输入文件须为 .xls、.xlsx 或 .csv".into());
-    }
-    if !matches!(target_type.as_str(), "xlsx" | "csv") {
-        return Err("输出文件须为 .xlsx 或 .csv".into());
     }
 
     let source_rows = if source_type == "csv" {
@@ -69,6 +67,17 @@ pub fn convert(input: &Path, output: &Path, db: &Database) -> Result<Summary, St
             rows.push([lookup.phone, lookup.carrier, lookup.province, lookup.city]);
         }
     }
+    Ok(Prepared { summary, rows })
+}
+
+pub fn export_prepared(prepared: &Prepared, output: &Path) -> Result<(), String> {
+    if output.exists() {
+        return Err("输出文件已存在，请选择另一个文件名".into());
+    }
+    let target_type = extension(output);
+    if !matches!(target_type.as_str(), "xlsx" | "csv") {
+        return Err("输出文件须为 .xlsx 或 .csv".into());
+    }
 
     let directory = output
         .parent()
@@ -80,14 +89,21 @@ pub fn convert(input: &Path, output: &Path, db: &Database) -> Result<Summary, St
     let mut temporary = NamedTempFile::new_in(directory)
         .map_err(|error| format!("无法在输出文件夹创建文件：{error}"))?;
     if target_type == "csv" {
-        write_csv(&mut temporary, &rows)?;
+        write_csv(&mut temporary, &prepared.rows)?;
     } else {
-        write_excel(&mut temporary, &rows)?;
+        write_excel(&mut temporary, &prepared.rows)?;
     }
     temporary
         .persist_noclobber(output)
         .map_err(|error| format!("无法保存输出文件：{}", error.error))?;
-    Ok(summary)
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn convert(input: &Path, output: &Path, db: &Database) -> Result<Summary, String> {
+    let prepared = prepare(input, db)?;
+    export_prepared(&prepared, output)?;
+    Ok(prepared.summary)
 }
 
 fn extension(path: &Path) -> String {
@@ -603,6 +619,23 @@ mod tests {
         let database = Database::load().unwrap();
         assert!(convert(&input, &output, &database).is_err());
         assert_eq!(fs::read_to_string(&output).unwrap(), "原有文件");
+    }
+
+    #[test]
+    fn prepare_keeps_source_folder_untouched_and_exports_twice() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.csv");
+        fs::write(&input, "手机号\n13213000000\n").unwrap();
+        let database = Database::load().unwrap();
+        let prepared = prepare(&input, &database).unwrap();
+        assert_eq!(prepared.summary.found, 1);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        let csv_output = directory.path().join("out.csv");
+        let xlsx_output = directory.path().join("out.xlsx");
+        export_prepared(&prepared, &csv_output).unwrap();
+        export_prepared(&prepared, &xlsx_output).unwrap();
+        assert!(csv_output.is_file());
+        assert_eq!(read_xlsx(&xlsx_output).unwrap()[1], "13213000000");
     }
 
     #[test]

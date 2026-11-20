@@ -18,6 +18,8 @@ unsafe extern "system" {
     fn IsWindowVisible(window: Hwnd) -> i32;
     fn MapWindowPoints(from: Hwnd, to: Hwnd, points: *mut super::Point, count: u32) -> i32;
     fn SetThreadDpiAwarenessContext(context: Handle) -> Handle;
+    fn ValidateRect(window: Hwnd, rect: *const Rect) -> i32;
+    fn GetUpdateRect(window: Hwnd, rect: *mut Rect, erase: i32) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -71,6 +73,34 @@ fn font_height(edit: Hwnd) -> i32 {
         92
     );
     logfont[0].abs()
+}
+
+fn assert_typing_keeps_background_clean(window: Hwnd, edit: Hwnd) {
+    const WM_CHAR: u32 = 0x0102;
+    unsafe { set_text(edit, "") };
+    let (width, height) = client_size(window);
+    let total_area = i64::from(width) * i64::from(height);
+    for character in "13213000000".chars() {
+        unsafe {
+            assert_ne!(ValidateRect(window, std::ptr::null()), 0);
+            SendMessageW(edit, WM_CHAR, character as usize, 0);
+            let mut dirty = Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if GetUpdateRect(window, &mut dirty, 0) != 0 {
+                let dirty_area =
+                    i64::from(dirty.right - dirty.left) * i64::from(dirty.bottom - dirty.top);
+                assert!(
+                    dirty_area * 4 <= total_area * 3,
+                    "typing dirtied most of the main window: {dirty_area}/{total_area}"
+                );
+            }
+        }
+    }
+    assert_eq!(unsafe { text_of(edit) }, "13213000000");
 }
 
 // On a headless Windows desktop the compositor can return black for PrintWindow.
@@ -163,8 +193,9 @@ fn native_window_rescales_after_monitor_change() {
     assert!(!edit.is_null() && !query.is_null() && !result.is_null());
     unsafe {
         ShowWindow(window, 5);
-        set_text(edit, "+86 132 1300 0000");
     }
+    assert_typing_keeps_background_clean(window, edit);
+    unsafe { set_text(edit, "+86 132 1300 0000") };
 
     let mut baseline = None;
     for dpi in [96i32, 144, 192, 96] {
@@ -226,6 +257,7 @@ fn native_window_rescales_after_monitor_change() {
             capture_client(window, Path::new(&path));
         }
     }
+    super::drop_files::assert_native_drop(window);
     unsafe {
         DestroyWindow(window);
         SetThreadDpiAwarenessContext(previous);
