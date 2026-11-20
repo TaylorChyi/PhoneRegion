@@ -71,6 +71,37 @@ def check_captures(frames):
                 contaminated_rows += blue_pixels > shot.width * 0.75
             if contaminated_rows >= 2:
                 raise ValueError(f"Desktop is visible below the application: {frames / name}")
+    check_horizontal_alignment(frames)
+
+
+def check_horizontal_alignment(frames):
+    # Sample the straight sides at the vertical centre of each control.
+    # Coordinates include the title bar of the standard 946x629 capture.
+    rows = {"input": 165, "result": 275, "drop": 440, "export": 535}
+    for filename in ("01-empty.png", "09-ready-to-export.png", "11-batch-complete.png"):
+        with Image.open(frames / filename) as opened:
+            shot = opened.convert("RGB")
+        width, height = shot.size
+        if width < 800 or height < 550:
+            raise ValueError(f"Capture too small for alignment check: {frames / filename}")
+        edges = {}
+        for part, reference_y in rows.items():
+            y = round(reference_y * height / 629)
+            background = shot.getpixel((width // 40, y))
+            pixels = shot.load()
+            hits = [x for x in range(width * 3 // 100, width * 97 // 100)
+                    if max(abs(pixels[x, y][channel] - background[channel])
+                           for channel in range(3)) >= 15]
+            if not hits:
+                raise ValueError(f"Could not find {part} border in {frames / filename}")
+            edges[part] = (hits[0], hits[-1])
+        lefts = [pair[0] for pair in edges.values()]
+        rights = [pair[1] for pair in edges.values()]
+        margins = [(left - 1, width - 2 - right) for left, right in edges.values()]
+        if (max(lefts) - min(lefts) > 3 or max(rights) - min(rights) > 3 or
+                any(abs(left - right) > 3 for left, right in margins)):
+            raise ValueError(f"Misaligned content in {frames / filename}: "
+                             f"edges={edges}, client margins={margins}")
 
 
 def check_theme_difference(light, dark):

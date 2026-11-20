@@ -9,6 +9,9 @@ use std::ffi::c_void;
 const WM_PAINT: u32 = 0x000F;
 const WM_PRINTCLIENT: u32 = 0x0318;
 const WM_NCDESTROY: u32 = 0x0082;
+const EM_SETMARGINS: u32 = 0x00D3;
+const EC_LEFTMARGIN: usize = 1;
+const EC_RIGHTMARGIN: usize = 2;
 const SUBCLASS_ID: usize = 1;
 
 #[link(name = "comctl32")]
@@ -73,9 +76,6 @@ unsafe fn paint_hint(edit: Hwnd, parent: Hwnd, dc: Handle) {
     if width == 0 || height == 0 {
         return;
     }
-    let inset = super::pixels(2.0, dpi);
-    rect.left += inset;
-    rect.right -= inset;
     unsafe {
         let caret_hidden = HideCaret(edit) != 0;
         FillRect(dc, &rect, brush);
@@ -85,9 +85,9 @@ unsafe fn paint_hint(edit: Hwnd, parent: Hwnd, dc: Handle) {
             font,
             color,
             [
-                4.0,
                 0.0,
-                width as f32 * 96.0 / dpi as f32 - 8.0,
+                0.0,
+                width as f32 * 96.0 / dpi as f32,
                 height as f32 * 96.0 / dpi as f32,
             ],
             dpi,
@@ -124,6 +124,9 @@ unsafe extern "system" fn edit_proc(
                 ReleaseDC(hwnd, dc);
             }
         }
+    } else if message == super::WM_SETFONT {
+        // The enclosing field supplies both gutters, independent of the font.
+        unsafe { super::SendMessageW(hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0) };
     } else if message == WM_PRINTCLIENT {
         unsafe {
             paint_hint(hwnd, data as Hwnd, wparam as *mut c_void);
@@ -136,6 +139,7 @@ pub(super) unsafe fn install(edit: Hwnd, parent: Hwnd) {
     if !edit.is_null() {
         unsafe {
             SetWindowSubclass(edit, Some(edit_proc), SUBCLASS_ID, parent as usize);
+            super::SendMessageW(edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
         }
     }
 }

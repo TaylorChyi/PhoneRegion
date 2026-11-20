@@ -301,7 +301,6 @@ unsafe extern "system" {
     fn ReleaseDC(hwnd: Hwnd, dc: Handle) -> i32;
     fn SetScrollInfo(hwnd: Hwnd, bar: i32, info: *const ScrollInfo, redraw: i32) -> i32;
     fn GetScrollInfo(hwnd: Hwnd, bar: i32, info: *mut ScrollInfo) -> i32;
-    fn ShowScrollBar(hwnd: Hwnd, bar: i32, show: i32) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -381,7 +380,7 @@ struct UiState {
     layout: Layout,
     result_view: Option<ResultView>,
     result_note: &'static str,
-    scroll_visible: bool,
+    updating_scrollbar: bool,
     theme: Theme,
     busy: bool,
     prepared: Option<Arc<batch::Prepared>>,
@@ -417,10 +416,12 @@ impl ResultView {
 
 const CARRIER_NOTE: &str = "* 运营商为原号段信息。携号转网后，当前运营商可能不同。";
 const EXPORT_HEIGHT: f32 = 46.0;
+const INPUT_PADDING: f32 = 20.0;
+const QUERY_SIZE: f32 = 48.0;
 
 #[derive(Clone, Copy, Default)]
 struct Layout {
-    margin: f32,
+    left: f32,
     width: f32,
     result_y: f32,
     result_height: f32,
@@ -433,9 +434,17 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(window_width: f32, status_visible: bool) -> Self {
-        let margin = if window_width < 680.0 { 24.0 } else { 48.0 };
-        let width = (window_width - 2.0 * margin).clamp(1.0, 1080.0);
+    fn new(client_width: i32, dpi: u32, status_visible: bool) -> Self {
+        let gutter = if client_width < pixels(680.0, dpi) {
+            24.0
+        } else {
+            48.0
+        };
+        let width_px = (client_width - 2 * pixels(gutter, dpi)).clamp(1, pixels(1080.0, dpi));
+        let left_px = (client_width - width_px).max(0) / 2;
+        let dip_per_px = 96.0 / dpi as f32;
+        let left = left_px as f32 * dip_per_px;
+        let width = width_px as f32 * dip_per_px;
         let columns = width >= 720.0;
         let result_y = 187.0;
         let result_height = if columns { 112.0 } else { 294.0 };
@@ -444,7 +453,7 @@ impl Layout {
         let export_y = batch_y + 112.0 + 16.0;
         let status_y = export_y + EXPORT_HEIGHT + 16.0;
         Self {
-            margin,
+            left,
             width,
             result_y,
             result_height,
@@ -679,7 +688,7 @@ unsafe fn place(hwnd: Hwnd, x: f32, y: f32, width: f32, height: f32, dpi: u32, s
 
 unsafe fn reflow(hwnd: Hwnd) {
     let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
-    if state.is_null() {
+    if state.is_null() || unsafe { (*state).updating_scrollbar } {
         return;
     }
     let mut client = Rect {
@@ -688,61 +697,60 @@ unsafe fn reflow(hwnd: Hwnd) {
         right: 0,
         bottom: 0,
     };
-    unsafe {
-        GetClientRect(hwnd, &mut client);
-    }
+    unsafe { GetClientRect(hwnd, &mut client) };
     let dpi = unsafe { (*state).dpi };
-    let width = client.right as f32 * 96.0 / dpi as f32;
     let status_visible = unsafe { GetWindowTextLengthW((*state).progress) > 0 };
-    let layout = Layout::new(width, status_visible);
+    let (layout, scroll) = loop {
+        let viewport = client;
+        let layout = Layout::new(viewport.right, dpi, status_visible);
+        let height = pixels(layout.content_height, dpi);
+        let scroll = unsafe { (*state).scroll.clamp(0, (height - viewport.bottom).max(0)) };
+        let info = ScrollInfo {
+            size: std::mem::size_of::<ScrollInfo>() as u32,
+            mask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            min: 0,
+            max: height - 1, // The Win32 range includes both endpoints.
+            page: viewport.bottom as u32,
+            pos: scroll,
+            track_pos: 0,
+        };
+        // Windows may show or hide the scrollbar and synchronously send WM_SIZE.
+        // Finish that change before placing or painting any part of the content.
+        unsafe {
+            (*state).updating_scrollbar = true;
+            SetScrollInfo(hwnd, SB_VERT, &info, 1);
+            (*state).updating_scrollbar = false;
+            GetClientRect(hwnd, &mut client);
+        }
+        if client.right == viewport.right && client.bottom == viewport.bottom {
+            break (layout, scroll);
+        }
+    };
     let columns_changed = unsafe { (*state).layout.columns != layout.columns };
-    let max_scroll = (pixels(layout.content_height, dpi) - client.bottom).max(0);
-    let scroll = unsafe { (*state).scroll.clamp(0, max_scroll) };
-    let visible = max_scroll > 0;
     unsafe {
         (*state).layout = layout;
         (*state).scroll = scroll;
     }
-    let current_visible = unsafe { (*state).scroll_visible };
-    if current_visible != visible {
-        unsafe {
-            (*state).scroll_visible = visible;
-            ShowScrollBar(hwnd, SB_VERT, visible as i32);
-        }
-    }
-    let info = ScrollInfo {
-        size: std::mem::size_of::<ScrollInfo>() as u32,
-        mask: SIF_RANGE | SIF_PAGE | SIF_POS,
-        min: 0,
-        max: pixels(layout.content_height, dpi),
-        page: client.bottom as u32,
-        pos: scroll,
-        track_pos: 0,
-    };
-    unsafe {
-        SetScrollInfo(hwnd, SB_VERT, &info, 1);
-    }
-
-    let left = layout.margin + ((width - 2.0 * layout.margin - layout.width).max(0.0) / 2.0);
+    let left = layout.left;
     let full = layout.width;
     let content_scroll = scroll;
     unsafe {
         place((*state).title, left, 24.0, full, 50.0, dpi, content_scroll);
         place(
             (*state).input,
-            left + 20.0,
+            left + INPUT_PADDING,
             117.0,
-            (full - 106.0).max(80.0),
+            (full - 2.0 * INPUT_PADDING - QUERY_SIZE - 12.0).max(80.0),
             42.0,
             dpi,
             content_scroll,
         );
         place(
             (*state).query,
-            left + full - 65.0,
+            left + full - INPUT_PADDING - QUERY_SIZE,
             113.0,
-            48.0,
-            48.0,
+            QUERY_SIZE,
+            QUERY_SIZE,
             dpi,
             content_scroll,
         );
@@ -1314,7 +1322,7 @@ unsafe extern "system" fn window_proc(
                     layout: Layout::default(),
                     result_view: None,
                     result_note: "",
-                    scroll_visible: false,
+                    updating_scrollbar: false,
                     theme,
                     busy: false,
                     prepared: None,
@@ -1450,28 +1458,14 @@ unsafe extern "system" fn window_proc(
                 FillRect(wparam as Handle, &rect, brush);
             }
             if let Ok(canvas) = Canvas::new(wparam as Handle, dpi) {
-                let _ = canvas.fill_round_rect(
-                    layout.margin
-                        + ((rect.right as f32 * 96.0 / dpi as f32
-                            - 2.0 * layout.margin
-                            - layout.width)
-                            .max(0.0)
-                            / 2.0),
-                    99.0 - scroll,
-                    layout.width,
-                    72.0,
-                    18.0,
-                    rgb(colors.field),
-                );
+                let x = layout.left + 1.0;
+                let width = layout.width - 2.0;
+                let _ =
+                    canvas.fill_round_rect(x, 99.0 - scroll, width, 72.0, 18.0, rgb(colors.field));
                 let _ = canvas.stroke_round_rect(
-                    layout.margin
-                        + ((rect.right as f32 * 96.0 / dpi as f32
-                            - 2.0 * layout.margin
-                            - layout.width)
-                            .max(0.0)
-                            / 2.0),
+                    x,
                     99.0 - scroll,
-                    layout.width,
+                    width,
                     72.0,
                     18.0,
                     1.0,
