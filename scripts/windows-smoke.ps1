@@ -142,17 +142,23 @@ function Wait-Dialog([string]$Title, [int]$ProcessId) {
 }
 
 function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
-    $filename = [NativeWindow]::FindFileNameEdit($Dialog)
-    $accept = [NativeWindow]::GetDlgItem($Dialog, 1)
-    if ($filename -eq [IntPtr]::Zero -or $accept -eq [IntPtr]::Zero) {
-        throw 'The file dialog did not expose a filename field and OK button.'
+    # The common dialog creates and may replace its filename edit while initialising.
+    # Wait for its value to round-trip before asking the dialog to accept it.
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        $filename = [NativeWindow]::FindFileNameEdit($Dialog)
+        $accept = [NativeWindow]::GetDlgItem($Dialog, 1)
+        if ($filename -ne [IntPtr]::Zero -and $accept -ne [IntPtr]::Zero) {
+            [void][NativeWindow]::SendTextMessageW($filename, 0x000C, [IntPtr]::Zero, $Path)
+            if ((Read-WindowText $filename) -eq $Path) {
+                if (-not [NativeWindow]::PostMessageW($Dialog, 0x0111, [IntPtr]1, $accept)) {
+                    throw 'The common dialog did not accept its OK command.'
+                }
+                return
+            }
+        }
+        Start-Sleep -Milliseconds 150
     }
-    if ([NativeWindow]::SendTextMessageW($filename, 0x000C, [IntPtr]::Zero, $Path) -eq [IntPtr]::Zero) {
-        throw "Could not enter the file path '$Path'."
-    }
-    if (-not [NativeWindow]::PostMessageW($accept, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
-        throw "Could not accept the file path '$Path'."
-    }
+    throw "The filename edit did not retain '$Path'."
 }
 
 $source = (Resolve-Path -LiteralPath $ExePath).Path
