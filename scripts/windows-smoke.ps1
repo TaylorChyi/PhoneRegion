@@ -328,7 +328,11 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame)
             $confirm = [NativeWindow]::FindDialogChild($Dialog, 'Button', 1)
             if ($filename -ne [IntPtr]::Zero -and $confirm -ne [IntPtr]::Zero -and
                 [NativeWindow]::IsWindowEnabled($filename)) {
-                [void][NativeWindow]::SendTextMessageW($filename, 0x000C, [IntPtr]::Zero, $Path)
+                # Pasting into the focused edit also notifies Explorer's filename model.
+                [void][NativeWindow]::SendMessageW($Dialog, 0x0028, $filename, [IntPtr]1)
+                [void][NativeWindow]::SendMessageW($filename, 0x00B1, [IntPtr]::Zero, [IntPtr](-1))
+                [NativeWindow]::PutClipboardText($Path)
+                [void][NativeWindow]::SendMessageW($filename, 0x0302, [IntPtr]::Zero, [IntPtr]::Zero)
                 Start-Sleep -Milliseconds 100
                 if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($confirm) -and
                     (Read-WindowText $filename) -eq $Path) {
