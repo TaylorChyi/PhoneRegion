@@ -697,6 +697,7 @@ try {
         @(Get-ChildItem -LiteralPath $isolated -Filter 'phones_归属地结果*' -File).Count -gt 0) {
         throw 'Import opened the save dialog or wrote an output before the user requested export.'
     }
+    Assert-ControlBounds $window @(1008)
     Save-DemoFrame $window '09-ready-to-export.png'
     if (-not [NativeWindow]::PostMessageW($exportControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
         throw 'Could not open the result save dialog.'

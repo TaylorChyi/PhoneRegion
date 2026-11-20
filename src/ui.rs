@@ -14,6 +14,8 @@ mod dpi_tests;
 mod drawing;
 #[path = "ui/drop_files.rs"]
 mod drop_files;
+#[path = "ui/edit_hint.rs"]
+mod edit_hint;
 use drawing::Canvas;
 
 type Handle = *mut c_void;
@@ -414,6 +416,8 @@ impl ResultView {
 }
 
 const CARRIER_NOTE: &str = "* 运营商为原号段信息。携号转网后，当前运营商可能不同。";
+const EXPORT_OFFSET: f32 = 44.0;
+const EXPORT_HEIGHT: f32 = 46.0;
 
 #[derive(Clone, Copy, Default)]
 struct Layout {
@@ -443,7 +447,12 @@ impl Layout {
             result_height,
             batch_y,
             status_y,
-            content_height: status_y + if export_visible { 132.0 } else { 68.0 },
+            content_height: status_y
+                + if export_visible {
+                    EXPORT_OFFSET + EXPORT_HEIGHT + 16.0
+                } else {
+                    68.0
+                },
             columns,
         }
     }
@@ -773,16 +782,16 @@ unsafe fn reflow(hwnd: Hwnd) {
             left,
             layout.status_y,
             full,
-            64.0,
+            if export_visible { EXPORT_OFFSET } else { 64.0 },
             dpi,
             content_scroll,
         );
         place(
             (*state).export,
             left,
-            layout.status_y + 68.0,
+            layout.status_y + EXPORT_OFFSET,
             full,
-            46.0,
+            EXPORT_HEIGHT,
             dpi,
             content_scroll,
         );
@@ -1303,6 +1312,7 @@ unsafe extern "system" fn window_proc(
                     receiver: None,
                 });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+                edit_hint::install(input, hwnd);
                 if let Err(reason) = drop_files::install(import, hwnd) {
                     alert(hwnd, &reason, true);
                     return -1;
@@ -1402,6 +1412,8 @@ unsafe extern "system" fn window_proc(
                             (*state).source_path = Some(source);
                             set_text((*state).progress, &detail);
                             ShowWindow((*state).export, SW_SHOW);
+                            // Bring the completed import and its export action into view.
+                            (*state).scroll = i32::MAX;
                             reflow(hwnd);
                         }
                     }
