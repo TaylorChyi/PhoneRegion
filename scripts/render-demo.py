@@ -5,7 +5,7 @@ import csv
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
 
 CAPTION_HEIGHT = 76
@@ -105,8 +105,17 @@ def convert_native_hero(frames):
         return
     with Image.open(bitmap) as opened:
         hero = opened.convert("RGB")
-        if min(hero.size) < 1000 or max(ImageStat.Stat(hero).stddev) < 8:
-            raise ValueError(f"Unusable native 192 DPI capture: {bitmap}")
+        deviation = max(ImageStat.Stat(hero).stddev)
+        if min(hero.size) < 1000 or deviation < 8:
+            colours = hero.getcolors(maxcolors=65536)
+            colour_count = len(colours) if colours is not None else ">65536"
+            corner = Image.new("RGB", hero.size, hero.getpixel((0, 0)))
+            content_bbox = ImageChops.difference(hero, corner).getbbox()
+            raise ValueError(
+                f"Unusable native 192 DPI capture: {bitmap}; "
+                f"size={hero.size}, colours={colour_count}, "
+                f"non-corner bbox={content_bbox}, channel deviation={deviation:.2f}"
+            )
         hero.save(frames / "hero.png", format="PNG")
 
 

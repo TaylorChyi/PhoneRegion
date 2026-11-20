@@ -54,6 +54,7 @@ jobs:
           python -m pip install --disable-pip-version-check Pillow
           python ./scripts/render-demo.py ./target/demo-frames/light ./target/demo-frames/demo.gif --dark-frames ./target/demo-frames/dark
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: phone-region-demo-frames
           path: target/demo-frames/

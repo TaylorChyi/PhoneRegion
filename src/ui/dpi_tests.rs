@@ -14,7 +14,9 @@ unsafe extern "system" {
     fn GetDlgItem(parent: Hwnd, id: i32) -> Hwnd;
     fn GetDC(hwnd: Hwnd) -> Handle;
     fn ReleaseDC(hwnd: Hwnd, dc: Handle) -> i32;
-    fn PrintWindow(hwnd: Hwnd, destination: Handle, flags: u32) -> i32;
+    fn GetWindow(parent: Hwnd, relation: u32) -> Hwnd;
+    fn IsWindowVisible(window: Hwnd) -> i32;
+    fn MapWindowPoints(from: Hwnd, to: Hwnd, points: *mut super::Point, count: u32) -> i32;
     fn SetThreadDpiAwarenessContext(context: Handle) -> Handle;
 }
 
@@ -23,6 +25,18 @@ unsafe extern "system" {
     fn GetObjectW(handle: Handle, bytes: i32, result: *mut c_void) -> i32;
     fn CreateCompatibleDC(dc: Handle) -> Handle;
     fn DeleteDC(dc: Handle) -> i32;
+    fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
+    fn BitBlt(
+        to: Handle,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        from: Handle,
+        from_x: i32,
+        from_y: i32,
+        operation: u32,
+    ) -> i32;
     fn CreateDIBSection(
         dc: Handle,
         info: *const u32,
@@ -59,8 +73,39 @@ fn font_height(edit: Hwnd) -> i32 {
     logfont[0].abs()
 }
 
-// Optional lossless artwork for the README. PrintWindow asks Windows to render the
-// full client directly into a 24-bit DIB at its current size, including native children.
+// On a headless Windows desktop the compositor can return black for PrintWindow.
+// Paint the actual background and each native control into a DC at its real size.
+unsafe fn print_controls(window: Hwnd, dc: Handle) {
+    const GW_CHILD: u32 = 5;
+    const GW_HWNDNEXT: u32 = 2;
+    const WM_PRINT: u32 = 0x0317;
+    const PRF_CLIENT_ERASE: isize = 4 | 8;
+    const SRCCOPY: u32 = 0x00cc0020;
+    unsafe {
+        SendMessageW(window, super::WM_ERASEBKGND, dc as usize, 0);
+        let child_dc = CreateCompatibleDC(dc);
+        assert!(!child_dc.is_null());
+        let mut child = GetWindow(window, GW_CHILD);
+        while !child.is_null() {
+            let (w, h) = client_size(child);
+            if IsWindowVisible(child) != 0 && w > 0 && h > 0 {
+                let mut pos = super::Point { x: 0, y: 0 };
+                MapWindowPoints(child, window, &mut pos, 1);
+                let bitmap = CreateCompatibleBitmap(dc, w, h);
+                assert!(!bitmap.is_null());
+                let previous = super::SelectObject(child_dc, bitmap);
+                assert_ne!(BitBlt(child_dc, 0, 0, w, h, dc, pos.x, pos.y, SRCCOPY), 0);
+                SendMessageW(child, WM_PRINT, child_dc as usize, PRF_CLIENT_ERASE);
+                assert_ne!(BitBlt(dc, pos.x, pos.y, w, h, child_dc, 0, 0, SRCCOPY), 0);
+                super::SelectObject(child_dc, previous);
+                super::DeleteObject(bitmap);
+            }
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+        DeleteDC(child_dc);
+    }
+}
+
 fn capture_client(window: Hwnd, path: &Path) {
     let (width, height) = client_size(window);
     assert!(
@@ -90,15 +135,12 @@ fn capture_client(window: Hwnd, path: &Path) {
         ReleaseDC(window, screen);
         assert!(!dc.is_null() && !bitmap.is_null() && !bits.is_null());
         let previous = super::SelectObject(dc, bitmap);
-        let printed = PrintWindow(
-            window, dc, 3, /* PW_CLIENTONLY | PW_RENDERFULLCONTENT */
-        );
+        print_controls(window, dc);
         GdiFlush();
         let bytes = std::slice::from_raw_parts(bits, length as usize).to_vec();
         super::SelectObject(dc, previous);
         super::DeleteObject(bitmap);
         DeleteDC(dc);
-        assert_ne!(printed, 0, "Windows could not render the client");
         bytes
     };
     let mut bmp = std::fs::File::create(path).unwrap();
@@ -164,7 +206,7 @@ fn native_window_rescales_after_monitor_change() {
         {
             // The CI desktop can be physically smaller than this logical second monitor.
             // Set the capture extent after validating the real controls' DPI transition.
-            // PrintWindow renders it even where it extends beyond the desktop.
+            // The native controls can draw into a DC beyond the desktop edge.
             const SWP_NOSENDCHANGING: u32 = 0x0400;
             unsafe {
                 assert_ne!(

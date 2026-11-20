@@ -288,8 +288,8 @@ unsafe extern "system" {
         flags: u32,
     ) -> i32;
     fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
-    fn GetDpiForWindow(hwnd: Hwnd) -> u32;
-    fn GetDpiForSystem() -> u32;
+    fn GetDC(hwnd: Hwnd) -> Handle;
+    fn ReleaseDC(hwnd: Hwnd, dc: Handle) -> i32;
     fn SetScrollInfo(hwnd: Hwnd, bar: i32, info: *const ScrollInfo, redraw: i32) -> i32;
     fn GetScrollInfo(hwnd: Hwnd, bar: i32, info: *mut ScrollInfo) -> i32;
     fn ShowScrollBar(hwnd: Hwnd, bar: i32, show: i32) -> i32;
@@ -309,10 +309,12 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(name: *const u16) -> Handle;
+    fn GetProcAddress(module: Handle, name: *const u8) -> *const c_void;
 }
 
 #[link(name = "gdi32")]
 unsafe extern "system" {
+    fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
     fn CreateFontW(
         height: i32,
         width: i32,
@@ -563,6 +565,54 @@ fn colors_for_mode(dark: bool) -> Colors {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+// GetDpiForWindow/System arrived after the first Windows 10 release. Resolve
+// them at runtime so the executable can still start on earlier builds.
+unsafe fn device_dpi() -> u32 {
+    unsafe {
+        let dc = GetDC(null_mut());
+        if dc.is_null() {
+            return 96;
+        }
+        let dpi = GetDeviceCaps(dc, 88); // LOGPIXELSX
+        ReleaseDC(null_mut(), dc);
+        if dpi > 0 { dpi as u32 } else { 96 }
+    }
+}
+
+unsafe fn dpi_for_window(hwnd: Hwnd) -> u32 {
+    unsafe {
+        let user32 = GetModuleHandleW(wide("user32.dll").as_ptr());
+        if !user32.is_null() {
+            let address = GetProcAddress(user32, c"GetDpiForWindow".as_ptr().cast());
+            if !address.is_null() {
+                let function: unsafe extern "system" fn(Hwnd) -> u32 = std::mem::transmute(address);
+                let dpi = function(hwnd);
+                if dpi != 0 {
+                    return dpi;
+                }
+            }
+        }
+        device_dpi()
+    }
+}
+
+unsafe fn system_dpi() -> u32 {
+    unsafe {
+        let user32 = GetModuleHandleW(wide("user32.dll").as_ptr());
+        if !user32.is_null() {
+            let address = GetProcAddress(user32, c"GetDpiForSystem".as_ptr().cast());
+            if !address.is_null() {
+                let function: unsafe extern "system" fn() -> u32 = std::mem::transmute(address);
+                let dpi = function();
+                if dpi != 0 {
+                    return dpi;
+                }
+            }
+        }
+        device_dpi()
+    }
 }
 
 fn pixels(dip: f32, dpi: u32) -> i32 {
@@ -955,7 +1005,7 @@ unsafe extern "system" fn window_proc(
                 }
             };
             unsafe {
-                let dpi = GetDpiForWindow(hwnd).max(96);
+                let dpi = dpi_for_window(hwnd).max(96);
                 let font = make_font(17.0, 400, dpi);
                 let title_font = make_font(34.0, 650, dpi);
                 let input_font = make_font(24.0, 400, dpi);
@@ -1694,7 +1744,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_GETMINMAXINFO => {
             if lparam != 0 {
-                let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+                let dpi = unsafe { dpi_for_window(hwnd) }.max(96);
                 unsafe {
                     (*(lparam as *mut MinMaxInfo)).min_track_size = Point {
                         x: pixels(540.0, dpi),
@@ -1822,7 +1872,7 @@ unsafe fn create_main_window() -> Result<Hwnd, String> {
         }
         let title = wide("手机号归属地 · 离线查询");
         let available = work_area();
-        let system_dpi = GetDpiForSystem().max(96);
+        let system_dpi = system_dpi().max(96);
         let width = pixels(960.0, system_dpi).min(available.right - available.left);
         let height = pixels(700.0, system_dpi).min(available.bottom - available.top);
         let hwnd = CreateWindowExW(
