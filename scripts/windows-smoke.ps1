@@ -140,7 +140,7 @@ try {
     # Launch a copy away from the repository to check that the lookup data is bundled.
     if ($BlockNetwork) {
         $newRuleName = 'PhoneRegionSmoke-' + [guid]::NewGuid().ToString('N')
-        New-NetFirewallRule -Name $newRuleName -Direction Outbound -Program $copiedExe -Action Block -Profile Any | Out-Null
+        New-NetFirewallRule -Name $newRuleName -DisplayName $newRuleName -Direction Outbound -Program $copiedExe -Action Block -Profile Any | Out-Null
         $firewallRule = $newRuleName
         if (-not (Get-NetFirewallRule -Name $firewallRule -ErrorAction SilentlyContinue)) {
             throw 'The outbound block rule was not installed.'
