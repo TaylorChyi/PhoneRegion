@@ -1,6 +1,7 @@
 fn main() {
     for path in [
         "windows/app.rc",
+        "windows/cli.rc",
         "windows/phone-region.ico",
         "windows/app.manifest",
         "windows/third-party-notices.zip",
@@ -15,5 +16,8 @@ fn main() {
         embed_resource::compile_for("windows/app.rc", ["PhoneRegion"], embed_resource::NONE)
             .manifest_required()
             .expect("could not compile Windows resources");
+        embed_resource::compile_for("windows/cli.rc", ["phone-region-cli"], embed_resource::NONE)
+            .manifest_required()
+            .expect("could not compile CLI Windows resources");
     }
 }

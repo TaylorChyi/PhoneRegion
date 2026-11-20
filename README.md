@@ -4,7 +4,7 @@
 
 <p align="center"><strong>中国大陆手机号归属地查询</strong><br>Offline phone number lookup for mainland China</p>
 
-<p align="center">PhoneRegion 是 Windows 离线手机号段查询工具。输入一个中国大陆手机号，即可按前七位查到原号段运营商、省份和地市。也可以批量处理 Excel 或 CSV 号码清单，为每个号码补上这三个字段。</p>
+<p align="center">PhoneRegion 提供 Windows 图形界面和面向脚本的离线查询 CLI。输入一个中国大陆手机号，即可按前七位查到原号段运营商、省份和地市。也可以批量处理 Excel 或 CSV 号码清单，为每个号码补上这三个字段。</p>
 
 <p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a> · <a href="#agent-reference">AI agent 使用入口</a></p>
 
@@ -24,10 +24,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe"><img alt="下载 Windows 版 PhoneRegion.exe" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%20Windows%20%E7%89%88-PhoneRegion.exe-176b50?style=for-the-badge"></a>
+  <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe"><img alt="下载 Windows GUI · PhoneRegion.exe" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%20Windows%20GUI-PhoneRegion.exe-176b50?style=for-the-badge"></a>
+  <a href="https://raw.githubusercontent.com/TaylorChyi/PhoneRegion/main/download/phone-region-cli.exe"><img alt="下载 Windows CLI · phone-region-cli.exe" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%20Windows%20CLI-phone--region--cli.exe-315579?style=for-the-badge"></a>
 </p>
 
-<p align="center">双击即可运行。查询和导出均在本机完成，程序不上传号码或表格，也不保存查询历史。 <a href="https://github.com/TaylorChyi/PhoneRegion/releases">所有版本</a></p>
+<p align="center">图形版双击即可运行。查询和导出均在本机完成，程序不上传号码或表格，也不保存查询历史。 <a href="https://github.com/TaylorChyi/PhoneRegion/releases">所有版本</a></p>
 
 <p align="center">
   <picture>
@@ -82,16 +83,47 @@
 <p align="center">地市列显示地级市、自治州、地区、盟或直辖市的规范名称。只能确定省份时，地市留空。格式错误或未收录的号码仍保留在导出结果中，后三列留空。 <a href="data/SOURCE.md">数据来源</a></p>
 
 <a name="agent-reference"></a>
-<h2 align="center">AI agent 使用入口</h2>
 
-<p align="center">例如，用户想把一张只有手机号的 CSV 按省份汇总。能操作 Windows 桌面的 agent 可以在 PhoneRegion 窗口导入号码清单，导出结果后按「归属地省份」分组。</p>
+<h2 align="center">AI agent 与命令行</h2>
 
-<table align="center">
-  <thead><tr><th>任务</th><th>入口与用法</th></tr></thead>
-  <tbody>
-    <tr><td>识别或引用项目</td><td>GitHub 仓库为 <a href="https://github.com/TaylorChyi/PhoneRegion"><code>TaylorChyi/PhoneRegion</code></a>。引用特定版本时，使用该版本 Release 元数据中的 <code>html_url</code>。</td></tr>
-    <tr><td>获取发布版</td><td>读取 <a href="https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest">最新 Release 元数据（JSON）</a>。<code>tag_name</code> 是版本号，在 <code>assets</code> 中按名称选择 <code>PhoneRegion.exe</code>，从其 <code>browser_download_url</code> 下载。</td></tr>
-    <tr><td>验证批量查询</td><td>导入<a href="docs/example.csv">仓库中的示例 CSV</a>。首条数据 <code>132 1300 0000</code> 导出后应为 <code>13213000000,中国联通,河南省,郑州市</code>。</td></tr>
-    <tr><td>读取导出结果</td><td>CSV 使用带 BOM 的 UTF-8，表头固定为 <code>手机号,运营商,归属地省份,归属地地级市</code>。读取时将手机号作为文本，并保留空字段。<a href="src/batch.rs">导入与导出实现</a></td></tr>
-  </tbody>
-</table>
+在 PowerShell 中打开下载目录，运行 `.\phone-region-cli.exe describe` 即可读取命令、返回字段和退出码。Windows x64 用户可直接下载 [CLI 可执行文件](https://raw.githubusercontent.com/TaylorChyi/PhoneRegion/main/download/phone-region-cli.exe)。使用 Rust 的开发者可在仓库根目录运行 `cargo build --locked --release --bin phone-region-cli`，从 `target/release/` 获取本机版本。
+
+| 操作 | PowerShell 示例 |
+| --- | --- |
+| 单号或多号查询，每个号码作为一个参数 | `.\phone-region-cli.exe lookup "+86 132 1300 0000" "13900200000"` |
+| 通过标准输入传入 JSON 字符串数组 | `'["13213000000",""]' \| .\phone-region-cli.exe lookup --stdin` |
+| 导入 Excel 或 CSV，另存为新文件 | `.\phone-region-cli.exe batch .\example.csv .\results.xlsx` |
+| 查看用法或版本 | `.\phone-region-cli.exe --help` 或 `.\phone-region-cli.exe --version` |
+
+**Python 调用示例。** 下例一次传入一个有效号码和一个格式错误的号码，按原顺序逐条读取结果。
+
+```python
+import json
+import subprocess
+
+run = subprocess.run(
+    [r".\phone-region-cli.exe", "lookup", "--stdin"],
+    input=json.dumps(["+86 132 1300 0000", "123"]),
+    capture_output=True, text=True, encoding="utf-8",
+)
+if run.returncode:
+    raise RuntimeError(json.loads(run.stderr)["error"]["message"])
+for row in json.loads(run.stdout)["results"]:
+    print(row["phone"], row["status"], row["city"])
+```
+
+`lookup` 返回 `schema_version: 1` 和 `results` 数组。每条记录含 `phone`、`status`、`carrier`、`province`、`city`。号码以字符串表示，未知的运营商、省份或地市为 `null`。
+
+| 单条结果状态 | 含义 |
+| --- | --- |
+| `found` | 已匹配原号段，部分号段只收录到省份 |
+| `missing` | 号码格式有效，号段库未收录 |
+| `invalid` / `empty` | 输入格式有误或为空 |
+
+`batch` 支持导入 XLS、XLSX、CSV，导出到一个新的 XLSX 或 CSV 路径。成功时返回 `{"schema_version":1,"rows":3,"output":"results.xlsx"}` 这样的摘要，`rows` 不含表头。导出的 CSV 使用带 BOM 的 UTF-8，表头为 `手机号,运营商,归属地省份,归属地地级市`。可用[示例 CSV](docs/example.csv)核对，首条数据应导出为 `13213000000,中国联通,河南省,郑州市`。
+
+退出码 `0` 表示请求处理完毕，未匹配的号码可在 `results` 中查看。退出码 `2` 表示请求格式错误，`1` 表示运行或文件读写失败。失败时从标准错误读取 JSON 中的 `error.code` 和 `error.message`。
+
+引用 CLI 时可记录 `--version` 和仓库提交号。图形版的版本号及下载附件见 [GitHub Release 元数据](https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest)。
+
+如果你或你的 agent 选用了 PhoneRegion，欢迎到 [GitHub 项目首页](https://github.com/TaylorChyi/PhoneRegion)点一颗 Star。

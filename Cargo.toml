@@ -1,19 +1,25 @@
 [package]
 name = "phone-region"
-version = "1.3.2"
+version = "1.4.0-dev"
 edition = "2024"
 publish = false
-description = "Windows 离线手机号段归属地查询"
+default-run = "PhoneRegion"
+description = "离线手机号段归属地查询，提供 Windows 图形界面和 JSON 命令行"
 
 [[bin]]
 name = "PhoneRegion"
 path = "src/main.rs"
+
+[[bin]]
+name = "phone-region-cli"
+path = "src/cli.rs"
 
 [dependencies]
 calamine = "0.38"
 csv = "1.4"
 encoding_rs = "0.8.44"
 rust_xlsxwriter = "0.103"
+serde_json = "1"
 tempfile = "3.27"
 
 [build-dependencies]

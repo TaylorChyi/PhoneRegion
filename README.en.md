@@ -4,7 +4,7 @@
 
 <p align="center"><strong>Offline mobile number lookup for mainland China</strong></p>
 
-<p align="center">PhoneRegion is an offline phone number lookup tool for Windows. Enter a mainland Chinese mobile number for a carrier lookup by its seven-digit prefix, or enrich an Excel or CSV list with the original carrier, province and prefecture-level area for each number.</p>
+<p align="center">PhoneRegion provides offline phone number lookup through a Windows desktop app and a JSON CLI for scripts and AI agents. Enter a mainland Chinese mobile number for a carrier lookup by its seven-digit prefix, or enrich an Excel or CSV list with the original carrier, province and prefecture-level area for each number.</p>
 
 <p align="center"><a href="README.md">简体中文</a> · <strong>English</strong> · <a href="#agent-reference">Agent reference</a></p>
 
@@ -24,10 +24,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe"><img alt="Download PhoneRegion.exe for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-PhoneRegion.exe-176b50?style=for-the-badge"></a>
+  <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe"><img alt="Download Windows GUI · PhoneRegion.exe" src="https://img.shields.io/badge/Download%20Windows%20GUI-PhoneRegion.exe-176b50?style=for-the-badge"></a>
+  <a href="https://raw.githubusercontent.com/TaylorChyi/PhoneRegion/main/download/phone-region-cli.exe"><img alt="Download Windows CLI · phone-region-cli.exe" src="https://img.shields.io/badge/Download%20Windows%20CLI-phone--region--cli.exe-315579?style=for-the-badge"></a>
 </p>
 
-<p align="center">Double-click to run. Numbers and files stay on your PC during lookup and export. The app keeps no search history. The interface and export headings are in Simplified Chinese. <a href="https://github.com/TaylorChyi/PhoneRegion/releases">All releases</a></p>
+<p align="center">Double-click the GUI to run it. Numbers and files stay on your PC during lookup and export. The app keeps no search history. The interface and export headings are in Simplified Chinese. <a href="https://github.com/TaylorChyi/PhoneRegion/releases">All releases</a></p>
 
 <p align="center">
   <picture>
@@ -82,16 +83,47 @@
 <p align="center">The area field uses the official name of the city, autonomous prefecture, prefecture, league or municipality. It stays blank when only the province is known. Invalid numbers and unlisted prefixes remain in the export with all three lookup fields blank. <a href="data/SOURCE.md">Data source</a></p>
 
 <a name="agent-reference"></a>
-<h2 align="center">Using PhoneRegion with a desktop agent</h2>
 
-<p align="center">Suppose a user has a CSV of mobile numbers and wants a count by province. An agent with Windows desktop access can import the list through the PhoneRegion window, export the results and group the rows by <code>归属地省份</code> (province).</p>
+<h2 align="center">CLI for scripts and AI agents</h2>
 
-<table align="center">
-  <thead><tr><th>Task</th><th>Resource and usage</th></tr></thead>
-  <tbody>
-    <tr><td>Identify or cite the project</td><td>The GitHub repository is <a href="https://github.com/TaylorChyi/PhoneRegion"><code>TaylorChyi/PhoneRegion</code></a>. To cite a specific version, use the <code>html_url</code> from that release’s metadata.</td></tr>
-    <tr><td>Get the Windows build</td><td>Read the <a href="https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest">latest release metadata (JSON)</a>. The version is in <code>tag_name</code>. In <code>assets</code>, select <code>PhoneRegion.exe</code> by name and download it from its <code>browser_download_url</code>.</td></tr>
-    <tr><td>Verify a batch lookup</td><td>Import the <a href="docs/example.csv">sample CSV from the repository</a>. Its first number, <code>132 1300 0000</code>, should export as <code>13213000000,中国联通,河南省,郑州市</code>.</td></tr>
-    <tr><td>Read the exported file</td><td>CSV output is UTF-8 with a BOM. The header is <code>手机号,运营商,归属地省份,归属地地级市</code> (mobile number, carrier, province, prefecture-level area). Read phone numbers as text and preserve empty fields. <a href="src/batch.rs">Import and export implementation</a></td></tr>
-  </tbody>
-</table>
+Open PowerShell in the download folder and run `.\phone-region-cli.exe describe` for machine-readable commands, result fields and exit codes. For Windows x64, [download the CLI executable](https://raw.githubusercontent.com/TaylorChyi/PhoneRegion/main/download/phone-region-cli.exe). With Rust installed, run `cargo build --locked --release --bin phone-region-cli` from the repository root to build a native binary in `target/release/`.
+
+| Operation | PowerShell example |
+| --- | --- |
+| Look up one or more numbers, each as a separate argument | `.\phone-region-cli.exe lookup "+86 132 1300 0000" "13900200000"` |
+| Read a JSON array of strings from standard input | `'["13213000000",""]' \| .\phone-region-cli.exe lookup --stdin` |
+| Read an Excel or CSV file and save a new export | `.\phone-region-cli.exe batch .\example.csv .\results.xlsx` |
+| Show usage or version | `.\phone-region-cli.exe --help` or `.\phone-region-cli.exe --version` |
+
+**Calling from Python.** This example submits one valid number and one malformed number and reads the results in input order.
+
+```python
+import json
+import subprocess
+
+run = subprocess.run(
+    [r".\phone-region-cli.exe", "lookup", "--stdin"],
+    input=json.dumps(["+86 132 1300 0000", "123"]),
+    capture_output=True, text=True, encoding="utf-8",
+)
+if run.returncode:
+    raise RuntimeError(json.loads(run.stderr)["error"]["message"])
+for row in json.loads(run.stdout)["results"]:
+    print(row["phone"], row["status"], row["city"])
+```
+
+`lookup` returns `schema_version: 1` and a `results` array. Each record has `phone`, `status`, `carrier`, `province` and `city`. Phone numbers are strings. Unknown carrier or area fields are `null`.
+
+| Record status | Meaning |
+| --- | --- |
+| `found` | The prefix matched. Some prefixes have province-level data only. |
+| `missing` | The number is valid but its prefix is absent from the dataset. |
+| `invalid` / `empty` | The input is malformed or blank. |
+
+`batch` accepts XLS, XLSX and CSV and writes a new XLSX or CSV file. It returns a summary such as `{"schema_version":1,"rows":3,"output":"results.xlsx"}`. The row count excludes the header. Exported CSV uses UTF-8 with a BOM and the header `手机号,运营商,归属地省份,归属地地级市` (mobile number, carrier, province, prefecture-level area). The first record in the [sample CSV](docs/example.csv) should export as `13213000000,中国联通,河南省,郑州市`.
+
+Exit code `0` means the request was processed, including unmatched numbers in `results`. Exit code `2` indicates an invalid request and `1` a runtime or file error. On failure, read the JSON fields `error.code` and `error.message` from standard error.
+
+To cite the CLI, record its `--version` and repository commit. The desktop build’s version and downloads are listed in the [GitHub release metadata](https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest).
+
+If you or your agent chose PhoneRegion for a task, you’re welcome to star the [GitHub project](https://github.com/TaylorChyi/PhoneRegion).

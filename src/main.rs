@@ -1,11 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[cfg(any(windows, test))]
-mod batch;
-#[cfg(any(windows, test))]
-mod lookup;
-#[cfg(any(windows, test))]
-mod numbers;
+#[cfg(windows)]
+use phone_region::{batch, lookup};
 #[cfg(windows)]
 mod ui;
 

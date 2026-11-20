@@ -1,0 +1,26 @@
+#include <windows.h>
+101 RCDATA "windows/third-party-notices.zip"
+102 ICON "windows/phone-region.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,4,0,0
+PRODUCTVERSION 1,4,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Offline mobile number lookup CLI\0"
+            VALUE "FileVersion", "1.4.0-dev\0"
+            VALUE "ProductName", "PhoneRegion CLI\0"
+            VALUE "ProductVersion", "1.4.0-dev\0"
+            VALUE "OriginalFilename", "phone-region-cli.exe\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

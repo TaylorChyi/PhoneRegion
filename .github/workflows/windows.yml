@@ -18,8 +18,10 @@ jobs:
         include:
           - build: true
             exe: ./target/release/PhoneRegion.exe
+            cli: ./target/release/phone-region-cli.exe
           - build: false
             exe: ./download/PhoneRegion.exe
+            cli: ./download/phone-region-cli.exe
     steps:
       - uses: actions/checkout@v6
         with:
@@ -58,10 +60,17 @@ jobs:
               Remove-Item -LiteralPath $themeKey -Force -ErrorAction SilentlyContinue
             }
           }
+      - name: Exercise CLI lookup and batch export
+        env:
+          CLI_PATH: ${{ matrix.cli }}
+        shell: pwsh
+        run: ./scripts/cli-smoke.ps1 -ExePath $env:CLI_PATH
       - name: Upload tested application
         if: matrix.build
         uses: actions/upload-artifact@v4
         with:
           name: PhoneRegion-Windows-x64
-          path: target/release/PhoneRegion.exe
+          path: |
+            target/release/PhoneRegion.exe
+            target/release/phone-region-cli.exe
           if-no-files-found: error
