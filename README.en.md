@@ -10,14 +10,22 @@
   <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TaylorChyi/PhoneRegion?label=Release&amp;color=176b50"></a>
   <img alt="Windows 10 and 11 x64" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%20x64-0969da">
   <img alt="Fully offline" src="https://img.shields.io/badge/Lookup-Fully%20offline-176b50">
-  <img alt="Excel and CSV batch lookup" src="https://img.shields.io/badge/Batch-Excel%20%2F%20CSV-67539b">
+  <img alt="Single EXE, no installation required" src="https://img.shields.io/badge/Portable-Single%20EXE-556474">
 </p>
 
-<p align="center">Enter a mainland Chinese mobile number to see its <strong>original carrier, province and prefecture-level area</strong><br>right in the window. Import a whole list to look up the numbers, then export the results when ready, even without an internet connection.</p>
+<p align="center">
+  <strong>Original network operators</strong><br>
+  <img alt="Original network operators · China Mobile" src="https://img.shields.io/badge/China%20Mobile-16669b">
+  <img alt="Original network operators · China Unicom" src="https://img.shields.io/badge/China%20Unicom-b42332">
+  <img alt="Original network operators · China Telecom" src="https://img.shields.io/badge/China%20Telecom-194a97">
+  <img alt="Original network operators · China Broadnet" src="https://img.shields.io/badge/China%20Broadnet-74418b">
+</p>
 
-<h3 align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe">⬇ Download for Windows · PhoneRegion.exe</a></h3>
+<p align="center">
+  <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest/download/PhoneRegion.exe"><img alt="Download PhoneRegion.exe for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-PhoneRegion.exe-176b50?style=for-the-badge"></a>
+</p>
 
-<p align="center">Double-click to start. No installation, account or configuration is required. The interface and exported headings are in Simplified Chinese. <a href="https://github.com/TaylorChyi/PhoneRegion/releases">All releases</a></p>
+<p align="center">Double-click to run. Numbers and files stay on your PC during lookup and export. The app keeps no search history. The interface and export headings are in Simplified Chinese. <a href="https://github.com/TaylorChyi/PhoneRegion/releases">All releases</a></p>
 
 <p align="center">
   <picture>
@@ -26,21 +34,24 @@
   </picture>
 </p>
 
-<p align="center"><a href="docs/window-light.png">Full-size light view</a> · <a href="docs/window-dark.png">Full-size dark view</a></p>
+<p align="center">The app follows your Windows light, dark or high-contrast settings.<br><a href="docs/window-light.png">Full-size light view</a> · <a href="docs/window-dark.png">Full-size dark view</a></p>
 
-<h2 align="center">Look up one number instantly</h2>
+<h2 align="center">Look up one number</h2>
 
-<p align="center">The carrier, province and prefecture-level area fields are visible as soon as the window opens, each showing a dash until a result is available.<br>Paste <code>+86 132 1300 0000</code> to see <strong>China Unicom · Henan Province · Zhengzhou City</strong>.</p>
+<p align="center">Paste <code>+86 132 1300 0000</code> to see <strong>China Unicom · Henan Province · Zhengzhou City</strong>.<br>You can use <code>+86</code>, <code>0086</code> or <code>86</code> prefixes, full-width digits, spaces, brackets and hyphens within the number.</p>
 
-<p align="center">Use <code>+86</code>, <code>0086</code> or <code>86</code> prefixes, full-width digits, spaces, brackets and hyphens within the number.</p>
+<h2 align="center">Look up and export a list</h2>
 
-<h2 align="center">Look up an entire file</h2>
+<p align="center">
+  <img alt="Import XLS, XLSX or CSV" src="https://img.shields.io/badge/Import-XLS%20%C2%B7%20XLSX%20%C2%B7%20CSV-67539b">
+  <img alt="Export XLSX or CSV" src="https://img.shields.io/badge/Export-XLSX%20%C2%B7%20CSV-67539b">
+</p>
 
-<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.2/example.csv"><strong>Download a sample CSV</strong></a>, or click <strong>保存示例 CSV (Save sample CSV)</strong> above the drop area to get the same file offline.<br>It contains three number formats. For a single-number lookup, try <code>+86 132 1300 0000</code>.</p>
+<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.2/example.csv"><strong>Download a sample CSV</strong></a>, or click <strong>保存示例 CSV (Save sample CSV)</strong> above the drop area to get the same file offline.</p>
 
-<p align="center">Click the <strong>点击或拖入文件 (Click or drop a file)</strong> box or drag one Excel (<code>.xls</code>, <code>.xlsx</code>) or CSV file onto it. Parsing and lookup start immediately.<br>Put the numbers in the first column and leave other columns as they are. Excel does not need to be installed.<br>The app reads column A of the first worksheet or the first CSV column. A common heading such as 手机号 (mobile number) is optional.</p>
+<p align="center">Drop the file onto <strong>点击或拖入文件 (Click or drop a file)</strong>, or click the box to browse. The app reads column A of the first worksheet or the first CSV column. A heading such as 手机号 (mobile number) is optional. Excel does not need to be installed.<br>Separate complete numbers in the same cell with spaces to look up each one.</p>
 
-<p align="center">Several complete numbers separated by spaces in one cell produce separate result rows.<br>The <strong>导出结果 (Export results)</strong> button stays below the drop area and becomes available when there are rows to export. Click it to choose a location and Excel or CSV format.<br>You can export again after saving or cancelling. The original file stays intact. Valid numbers are normalised to 11 digits, with the original order and duplicates preserved.</p>
+<p align="center">After lookup, click <strong>导出结果 (Export results)</strong> below the drop area and choose a format and location. Valid numbers are normalised to 11 digits, with order and duplicates preserved. You can export again. The original file stays intact.</p>
 
 <table align="center">
   <thead><tr><th align="center">手机号<br><sub>Mobile number</sub></th><th align="center">运营商<br><sub>Carrier</sub></th><th align="center">归属地省份<br><sub>Province</sub></th><th align="center">归属地地级市<br><sub>Prefecture-level area</sub></th></tr></thead>
@@ -55,14 +66,15 @@
 
 <p align="center"><img src="docs/demo.gif" width="880" alt="Windows demo showing a formatted number lookup, CSV import and the Export results button"></p>
 
-<h2 align="center">Fully offline, with numbers kept on your PC</h2>
+<h2 align="center">Data coverage and interpretation</h2>
 
-<p align="center">Lookup data is included. Queries and exports run locally. The app does not upload your numbers or files and keeps no search history.<br>Copy the single <code>PhoneRegion.exe</code> file to a USB drive or another Windows 10 or 11 x64 PC and double-click it there.<br>The interface follows Windows light, dark and high-contrast settings.</p>
+<p align="center">
+  <a href="data/SOURCE.md"><img alt="Dataset dated 22 October 2026. View data source" src="https://img.shields.io/badge/Data%20as%20of-2026--10--22-546374"></a>
+  <img alt="522,410 seven-digit prefixes" src="https://img.shields.io/badge/7--digit%20prefixes-522%2C410-315579">
+  <img alt="517,515 prefixes with a known prefecture-level area" src="https://img.shields.io/badge/Prefecture%20known-517%2C515-176b50">
+  <img alt="4,895 prefixes with province only" src="https://img.shields.io/badge/Province%20only-4%2C895-596574">
+</p>
 
-<h2 align="center">Understanding the result</h2>
+<p align="center">The carrier, province and prefecture reflect the original prefix allocation. The current carrier may differ after number porting. A prefix cannot identify a phone’s current location. Where available, the virtual operator’s brand appears alongside the underlying carrier.</p>
 
-<p align="center">The included dataset is dated <strong>22 October 2026</strong> and contains <strong>522,410</strong> seven-digit prefixes.<br><strong>517,515</strong> have a known prefecture-level area. For the remaining <strong>4,895</strong>, the province is shown and the city field is blank.<br>Area names cover cities, autonomous prefectures, prefectures, leagues and municipalities in their official form.</p>
-
-<p align="center">Carrier and area describe the original allocation of the number prefix. Coverage includes China Mobile, China Unicom, China Telecom and China Broadnet.<br>Where the data includes a virtual operator, its brand appears alongside the underlying carrier. The current carrier may differ after a number has been ported.<br>A prefix cannot tell you where a person or phone is now. Invalid inputs and unlisted prefixes remain in the export with the three lookup fields blank. <a href="data/SOURCE.md">Data source</a></p>
-
-<p align="center"><sub>mainland China mobile numbers · original carrier · prefecture-level city · offline phone number lookup · Excel and CSV batch lookup</sub></p>
+<p align="center">The area field uses the official name of the city, autonomous prefecture, prefecture, league or municipality. It stays blank when only the province is known. Invalid numbers and unlisted prefixes remain in the export with all three lookup fields blank. <a href="data/SOURCE.md">Data source</a></p>
