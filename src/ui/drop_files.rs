@@ -52,6 +52,7 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn GetDlgItem(parent: Hwnd, id: i32) -> Hwnd;
     fn IsWindowVisible(window: Hwnd) -> i32;
+    fn IsWindowEnabled(window: Hwnd) -> i32;
 }
 
 pub(super) enum DropChoice {
@@ -195,12 +196,22 @@ pub(super) fn assert_native_drop(window: Hwnd) {
         };
         assert!(!state.is_null());
         unsafe { super::SendMessageW(window, super::WM_TIMER, super::TIMER_WORK, 0) };
-        if unsafe { (*state).prepared.is_some() } {
-            assert_eq!(
-                unsafe { (*state).prepared.as_ref().unwrap().summary.found },
-                1
-            );
+        if let Some(prepared) = unsafe { (*state).prepared.as_ref() } {
             assert_ne!(unsafe { IsWindowVisible((*state).export) }, 0);
+            assert_ne!(unsafe { IsWindowEnabled((*state).export) }, 0);
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+            let output = directory.path().join("export.csv");
+            crate::batch::export_prepared(prepared, &output).unwrap();
+            let row = csv::Reader::from_path(output)
+                .unwrap()
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                row.iter().collect::<Vec<_>>(),
+                ["13213000000", "中国联通", "河南省", "郑州市"]
+            );
             break;
         }
         assert!(
@@ -209,7 +220,6 @@ pub(super) fn assert_native_drop(window: Hwnd) {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[cfg(test)]

@@ -8,22 +8,18 @@ use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
 use rust_xlsxwriter::{Format, Workbook};
 use tempfile::NamedTempFile;
 
-use crate::lookup::{Database, Status};
+use crate::lookup::Database;
 
 const HEADERS: [&str; 4] = ["手机号", "运营商", "归属地省份", "归属地地级市"];
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Summary {
-    pub rows: usize,
-    pub found: usize,
-    pub invalid: usize,
-    pub missing: usize,
-    pub empty: usize,
+pub struct Prepared {
+    rows: Vec<[String; 4]>,
 }
 
-pub struct Prepared {
-    pub summary: Summary,
-    rows: Vec<[String; 4]>,
+impl Prepared {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
 }
 
 pub fn prepare(input: &Path, db: &Database) -> Result<Prepared, String> {
@@ -45,7 +41,6 @@ pub fn prepare(input: &Path, db: &Database) -> Result<Prepared, String> {
     let header_index = source_rows
         .iter()
         .position(|value| !value.trim().is_empty());
-    let mut summary = Summary::default();
     let mut rows = Vec::with_capacity(source_rows.len());
     for (index, value) in source_rows.into_iter().enumerate() {
         if Some(index) == header_index && is_header(&value) {
@@ -57,17 +52,10 @@ pub fn prepare(input: &Path, db: &Database) -> Result<Prepared, String> {
                 None => Cow::Borrowed(number),
             };
             let lookup = db.lookup(&source);
-            summary.rows += 1;
-            match lookup.status {
-                Status::Found => summary.found += 1,
-                Status::Invalid => summary.invalid += 1,
-                Status::Missing => summary.missing += 1,
-                Status::Empty => summary.empty += 1,
-            }
             rows.push([lookup.phone, lookup.carrier, lookup.province, lookup.city]);
         }
     }
-    Ok(Prepared { summary, rows })
+    Ok(Prepared { rows })
 }
 
 pub fn export_prepared(prepared: &Prepared, output: &Path) -> Result<(), String> {
@@ -100,10 +88,9 @@ pub fn export_prepared(prepared: &Prepared, output: &Path) -> Result<(), String>
 }
 
 #[cfg(test)]
-pub fn convert(input: &Path, output: &Path, db: &Database) -> Result<Summary, String> {
+fn convert(input: &Path, output: &Path, db: &Database) -> Result<(), String> {
     let prepared = prepare(input, db)?;
-    export_prepared(&prepared, output)?;
-    Ok(prepared.summary)
+    export_prepared(&prepared, output)
 }
 
 fn extension(path: &Path) -> String {
@@ -502,10 +489,7 @@ mod tests {
         file.write_all("手机号,忽略\n13213000000,a\n13213000000,b\n不合法,c\n".as_bytes())
             .unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.rows, 3);
-        assert_eq!(summary.found, 2);
-        assert_eq!(summary.invalid, 1);
+        convert(&input, &output, &database).unwrap();
         let bytes = fs::read(&output).unwrap();
         assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]));
         let mut reader = csv::Reader::from_reader(&bytes[3..]);
@@ -520,6 +504,8 @@ mod tests {
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].get(0), Some("13213000000"));
         assert_eq!(records[1].get(0), Some("13213000000"));
+        assert!(!records[0].get(1).unwrap().is_empty());
+        assert!(!records[1].get(1).unwrap().is_empty());
         assert_eq!(records[2].get(0), Some("不合法"));
         assert_eq!(records[2].get(1), Some(""));
         assert_eq!(records[2].len(), 4);
@@ -537,12 +523,12 @@ mod tests {
         sheet.write_string(1, 1, "忽略").unwrap();
         workbook.save(&input).unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.found, 1);
+        convert(&input, &output, &database).unwrap();
         let mut result = open_workbook_auto(&output).unwrap();
         let sheet = result.sheet_names()[0].clone();
         let range = result.worksheet_range(&sheet).unwrap();
         assert_eq!(range.get((1, 0)).unwrap().to_string(), "13213000000");
+        assert!(!range.get((1, 1)).unwrap().to_string().is_empty());
         assert_eq!(range.get((0, 3)).unwrap().to_string(), "归属地地级市");
     }
 
@@ -557,10 +543,17 @@ mod tests {
         sheet.write_string(3, 0, "13213000000").unwrap();
         workbook.save(&input).unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.empty, 2);
-        assert_eq!(summary.found, 1);
-        assert_eq!(summary.rows, 3);
+        convert(&input, &output, &database).unwrap();
+        let bytes = fs::read(&output).unwrap();
+        let records = csv::Reader::from_reader(&bytes[3..])
+            .records()
+            .map(|record| record.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 3);
+        assert!(records[0].iter().all(str::is_empty));
+        assert!(records[1].iter().all(str::is_empty));
+        assert_eq!(records[2].get(0), Some("13213000000"));
+        assert!(!records[2].get(1).unwrap().is_empty());
     }
 
     #[test]
@@ -570,9 +563,7 @@ mod tests {
         let output = directory.path().join("output.xlsx");
         fs::write(&input, "手机号\n13213000000\n\n\n").unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.rows, 3);
-        assert_eq!(summary.empty, 2);
+        convert(&input, &output, &database).unwrap();
         let rows = read_xlsx(&output).unwrap();
         assert_eq!(rows, ["手机号", "13213000000", "", ""]);
     }
@@ -628,14 +619,33 @@ mod tests {
         fs::write(&input, "手机号\n13213000000\n").unwrap();
         let database = Database::load().unwrap();
         let prepared = prepare(&input, &database).unwrap();
-        assert_eq!(prepared.summary.found, 1);
+        assert!(!prepared.is_empty());
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
         let csv_output = directory.path().join("out.csv");
         let xlsx_output = directory.path().join("out.xlsx");
         export_prepared(&prepared, &csv_output).unwrap();
         export_prepared(&prepared, &xlsx_output).unwrap();
         assert!(csv_output.is_file());
+        let bytes = fs::read(&csv_output).unwrap();
+        let records = csv::Reader::from_reader(&bytes[3..])
+            .records()
+            .map(|record| record.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].get(0), Some("13213000000"));
+        assert!(!records[0].get(1).unwrap().is_empty());
         assert_eq!(read_xlsx(&xlsx_output).unwrap()[1], "13213000000");
+    }
+
+    #[test]
+    fn only_header_has_no_export_rows_but_invalid_value_does() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.csv");
+        let database = Database::load().unwrap();
+        fs::write(&input, "手机号\n").unwrap();
+        assert!(prepare(&input, &database).unwrap().is_empty());
+        fs::write(&input, "手机号\n无效号码\n").unwrap();
+        assert!(!prepare(&input, &database).unwrap().is_empty());
     }
 
     #[test]
@@ -645,9 +655,7 @@ mod tests {
         let output = directory.path().join("output.csv");
         fs::write(&input, "手机号\n\"13213000000、13213000001\"\n").unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.rows, 2);
-        assert_eq!(summary.found, 2);
+        convert(&input, &output, &database).unwrap();
         let bytes = fs::read(&output).unwrap();
         let records = csv::Reader::from_reader(&bytes[3..])
             .records()
@@ -677,19 +685,25 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("output.csv");
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.rows, 4);
-        assert_eq!(summary.found, 3);
-        assert_eq!(summary.invalid, 1);
+        convert(&input, &output, &database).unwrap();
         let bytes = fs::read(&output).unwrap();
         let records = csv::Reader::from_reader(&bytes[3..])
             .records()
-            .map(|record| record.unwrap().get(0).unwrap().to_owned())
+            .map(|record| record.unwrap())
             .collect::<Vec<_>>();
         assert_eq!(
-            records,
+            records
+                .iter()
+                .map(|record| record.get(0).unwrap())
+                .collect::<Vec<_>>(),
             ["13213000000", "13213000000", "13213000001", "无效号码"]
         );
+        assert!(
+            records[..3]
+                .iter()
+                .all(|record| !record.get(1).unwrap().is_empty())
+        );
+        assert!(records[3].iter().skip(1).all(str::is_empty));
     }
 
     #[test]
@@ -699,14 +713,16 @@ mod tests {
         let output = directory.path().join("output.csv");
         fs::write(&input, "手机号\n1.3213000000E+10\n1.32E+10\n").unwrap();
         let database = Database::load().unwrap();
-        let summary = convert(&input, &output, &database).unwrap();
-        assert_eq!(summary.found, 1);
-        assert_eq!(summary.invalid, 1);
+        convert(&input, &output, &database).unwrap();
         let bytes = fs::read(&output).unwrap();
         let records = csv::Reader::from_reader(&bytes[3..])
             .records()
-            .map(|record| record.unwrap().get(0).unwrap().to_owned())
+            .map(|record| record.unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(records, ["13213000000", "1.32E+10"]);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].get(0), Some("13213000000"));
+        assert!(!records[0].get(1).unwrap().is_empty());
+        assert_eq!(records[1].get(0), Some("1.32E+10"));
+        assert!(records[1].iter().skip(1).all(str::is_empty));
     }
 }

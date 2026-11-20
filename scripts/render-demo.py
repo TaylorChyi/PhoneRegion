@@ -18,9 +18,9 @@ SCENES = [
     ("06-formatted-result.png", 2100, "直接显示归属地", "See carrier, province and city"),
     ("07-before-import.png", 1000, "批量导入", "Import Excel or CSV"),
     ("08-open-dialog.png", 1150, "选择号码文件", "Choose the input file"),
-    ("09-ready-to-export.png", 1500, "处理完成，点击导出结果", "Process first, then choose Export"),
+    ("09-ready-to-export.png", 1500, "处理完成，可导出结果", "Ready to export the results"),
     ("10-save-dialog.png", 1150, "选择保存位置", "Choose where to save the results"),
-    ("11-batch-complete.png", 1600, "导出完成", "See where the results were saved"),
+    ("11-batch-complete.png", 1600, "导出完成，可再次导出", "Export complete; export again if needed"),
     ("result.csv", 3100, "四列查询结果", "Open the exported results"),
 ]
 

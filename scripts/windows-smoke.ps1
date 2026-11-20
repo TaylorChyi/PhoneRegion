@@ -220,7 +220,7 @@ function Assert-ResultState([IntPtr]$Window, [string]$Carrier, [string]$Province
 
 function Snapshot-StableControls([IntPtr]$Window) {
     $snapshot = @{}
-    foreach ($id in @(1003, 1004, 1009)) {
+    foreach ($id in @(1003, 1004, 1008, 1009)) {
         $rect = Read-WindowRect ([NativeWindow]::GetDlgItem($Window, $id))
         $snapshot[$id] = "{0},{1},{2},{3}" -f $rect.left, $rect.top, $rect.right, $rect.bottom
     }
@@ -233,6 +233,31 @@ function Assert-StableControls([IntPtr]$Window, [hashtable]$Baseline) {
         if ($current[$id] -ne $Baseline[$id]) {
             throw "Control $id moved during phone editing: $($Baseline[$id]) -> $($current[$id])."
         }
+    }
+}
+
+function Test-ClearStatus([IntPtr]$ProgressControl) {
+    return (-not [NativeWindow]::IsWindowVisible($ProgressControl) -or
+        (Read-WindowText $ProgressControl) -eq '')
+}
+
+function Assert-ExportAvailability([IntPtr]$ExportControl, [bool]$Enabled) {
+    if ($ExportControl -eq [IntPtr]::Zero -or
+        -not [NativeWindow]::IsWindowVisible($ExportControl)) {
+        throw 'The export button must remain visible.'
+    }
+    if ([NativeWindow]::IsWindowEnabled($ExportControl) -ne $Enabled) {
+        throw "Export button enabled state differs from expected $Enabled."
+    }
+}
+
+function Assert-BatchReady([IntPtr]$ExportControl, [IntPtr]$ProgressControl) {
+    if (-not [NativeWindow]::IsWindowVisible($ExportControl) -or
+        -not [NativeWindow]::IsWindowEnabled($ExportControl)) {
+        throw 'The export button is not visible and enabled after successful processing.'
+    }
+    if (-not (Test-ClearStatus $ProgressControl)) {
+        throw "A success status remains visible: $(Read-WindowText $ProgressControl)"
     }
 }
 
@@ -512,7 +537,11 @@ function Check-WindowLayouts([IntPtr]$Window, [IntPtr]$ResultControl) {
                 Save-DemoFrame $Window 'layout-narrow.png'
             }
             Scroll-WindowToEdge $Window $true
-            Assert-ControlBounds $Window @(1003, 1005)
+            Assert-ControlBounds $Window @(1003, 1008)
+            $status = [NativeWindow]::GetDlgItem($Window, 1005)
+            if ([NativeWindow]::IsWindowVisible($status)) {
+                Assert-ControlBounds $Window @(1005)
+            }
             Assert-SamplePlacement $Window ($width -eq 720)
             Scroll-WindowToEdge $Window $false
         }
@@ -600,6 +629,7 @@ try {
     $inputControl = [NativeWindow]::GetDlgItem($window, 1001)
     $queryControl = [NativeWindow]::GetDlgItem($window, 1002)
     $resultControl = [NativeWindow]::GetDlgItem($window, 1004)
+    $exportControl = [NativeWindow]::GetDlgItem($window, 1008)
     if ($inputControl -eq [IntPtr]::Zero -or $queryControl -eq [IntPtr]::Zero -or
         $resultControl -eq [IntPtr]::Zero) {
         throw 'The phone input, query button or visible result control is missing.'
@@ -616,9 +646,11 @@ try {
     if ($demoEnabled) {
         Save-DemoFrame $window '01-empty.png'
     }
+    Assert-ExportAvailability $exportControl $false
     Assert-ResultState $window '—' '—' '—' ''
     Check-LiveEditing $window $inputControl $queryControl
     Assert-Result $inputControl $queryControl $resultControl '13213000000' @('中国联通', '河南省', '郑州市') @() -Live
+    Assert-ExportAvailability $exportControl $false
     Save-DemoFrame $window '02-single-result.png'
     $clientWidths = Check-WindowLayouts $window $resultControl
     if ($demoEnabled) {
@@ -707,23 +739,26 @@ try {
     if ($importControl -eq [IntPtr]::Zero -or $progressControl -eq [IntPtr]::Zero) {
         throw 'The batch import button or progress control is missing.'
     }
+    $exportBefore = Read-WindowRect $exportControl
     if (-not [NativeWindow]::PostMessageW($importControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
         throw 'Could not open the batch file picker.'
     }
     $openDialog = Wait-Dialog '选择手机号文件' $application.Id
     $openFrame = if ($demoEnabled) { '08-open-dialog.png' } else { '' }
     Complete-FileDialog $openDialog $inputCsv $openFrame
-    $exportControl = [NativeWindow]::GetDlgItem($window, 1008)
-    if ($exportControl -eq [IntPtr]::Zero) { throw 'The export button is missing.' }
     for ($attempt = 0; $attempt -lt 200; $attempt++) {
         $application.Refresh()
         if ($application.HasExited) { throw 'The application exited while importing the CSV.' }
         if ([NativeWindow]::IsWindowVisible($exportControl) -and
-            [NativeWindow]::IsWindowEnabled($exportControl)) { break }
+            [NativeWindow]::IsWindowEnabled($exportControl) -and
+            (Test-ClearStatus $progressControl)) { break }
         Start-Sleep -Milliseconds 100
     }
-    if (-not [NativeWindow]::IsWindowVisible($exportControl)) {
-        throw "The export button did not become visible after 20 seconds. Progress: $(Read-WindowText $progressControl)"
+    Assert-BatchReady $exportControl $progressControl
+    $exportReady = Read-WindowRect $exportControl
+    if ($exportReady.left -ne $exportBefore.left -or $exportReady.top -ne $exportBefore.top -or
+        $exportReady.right -ne $exportBefore.right -or $exportReady.bottom -ne $exportBefore.bottom) {
+        throw 'The export button moved or changed size after import.'
     }
     if ([NativeWindow]::FindWindowW('#32770', '保存查询结果') -ne [IntPtr]::Zero -or
         (Test-Path -LiteralPath $outputCsv) -or
@@ -745,24 +780,32 @@ try {
     if ([NativeWindow]::IsWindow($cancelDialog) -or -not [NativeWindow]::IsWindowEnabled($window)) {
         throw 'The save dialog did not close when cancelled.'
     }
-    if (-not [NativeWindow]::IsWindowVisible($exportControl)) {
-        throw 'Cancelling export removed the prepared result.'
-    }
+    Assert-ExportAvailability $exportControl $true
     if (-not [NativeWindow]::PostMessageW($exportControl, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
         throw 'Could not reopen the result save dialog.'
     }
     $saveDialog = Wait-Dialog '保存查询结果' $application.Id
     $saveFrame = if ($demoEnabled) { '10-save-dialog.png' } else { '' }
     Complete-FileDialog $saveDialog $outputCsv $saveFrame
-    for ($attempt = 0; $attempt -lt 200 -and -not (Test-Path -LiteralPath $outputCsv); $attempt++) {
+    for ($attempt = 0; $attempt -lt 200; $attempt++) {
         $application.Refresh()
         if ($application.HasExited) {
             throw "The application exited while processing the CSV (exit code $($application.ExitCode))."
         }
+        if ((Test-Path -LiteralPath $outputCsv) -and
+            [NativeWindow]::IsWindowVisible($exportControl) -and
+            [NativeWindow]::IsWindowEnabled($exportControl) -and
+            (Test-ClearStatus $progressControl)) { break }
         Start-Sleep -Milliseconds 100
     }
     if (-not (Test-Path -LiteralPath $outputCsv)) {
         throw "The output CSV did not appear within 20 seconds. Progress: $(Read-WindowText $progressControl)"
+    }
+    Assert-BatchReady $exportControl $progressControl
+    $exportSaved = Read-WindowRect $exportControl
+    if ($exportSaved.left -ne $exportReady.left -or $exportSaved.top -ne $exportReady.top -or
+        $exportSaved.right -ne $exportReady.right -or $exportSaved.bottom -ne $exportReady.bottom) {
+        throw 'The export button moved or changed size after saving.'
     }
     $records = @(Import-Csv -LiteralPath $outputCsv -Encoding utf8)
     $expectedRows = if ($demoEnabled) { 5 } else { 3 }
@@ -798,13 +841,6 @@ try {
         throw 'The original input CSV disappeared.'
     }
     if ($demoEnabled) {
-        for ($attempt = 0; $attempt -lt 40; $attempt++) {
-            if ((Read-WindowText $progressControl).Contains('已保存')) { break }
-            Start-Sleep -Milliseconds 100
-        }
-        if (-not (Read-WindowText $progressControl).Contains('已保存')) {
-            throw 'The batch completion status did not appear for the demo.'
-        }
         Save-DemoFrame $window '11-batch-complete.png'
         Copy-Item -LiteralPath $outputCsv -Destination (Join-Path $DemoDirectory 'result.csv')
     }

@@ -114,6 +114,7 @@ const RDW_ERASE: u32 = 4;
 const RDW_ALLCHILDREN: u32 = 0x80;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_NOCOPYBITS: u32 = 0x0100;
 const SB_VERT: i32 = 1;
 const SIF_RANGE: u32 = 1;
 const SIF_PAGE: u32 = 2;
@@ -255,7 +256,6 @@ unsafe extern "system" {
     fn DispatchMessageW(message: *const Message) -> Lresult;
     fn PostQuitMessage(code: i32);
     fn ShowWindow(hwnd: Hwnd, command: i32) -> i32;
-    fn IsWindowVisible(hwnd: Hwnd) -> i32;
     fn UpdateWindow(hwnd: Hwnd) -> i32;
     fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
     fn SetWindowTextW(hwnd: Hwnd, text: *const u16) -> i32;
@@ -391,7 +391,7 @@ struct UiState {
 
 enum WorkerResult {
     Imported(PathBuf, Result<batch::Prepared, String>),
-    Exported(Result<PathBuf, String>),
+    Exported(Result<(), String>),
 }
 
 #[derive(Clone, PartialEq)]
@@ -416,7 +416,6 @@ impl ResultView {
 }
 
 const CARRIER_NOTE: &str = "* 运营商为原号段信息。携号转网后，当前运营商可能不同。";
-const EXPORT_OFFSET: f32 = 44.0;
 const EXPORT_HEIGHT: f32 = 46.0;
 
 #[derive(Clone, Copy, Default)]
@@ -426,6 +425,7 @@ struct Layout {
     result_y: f32,
     result_height: f32,
     batch_y: f32,
+    export_y: f32,
     status_y: f32,
     content_height: f32,
     columns: bool,
@@ -433,28 +433,25 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(window_width: f32, export_visible: bool) -> Self {
+    fn new(window_width: f32, status_visible: bool) -> Self {
         let margin = if window_width < 680.0 { 24.0 } else { 48.0 };
         let width = (window_width - 2.0 * margin).clamp(1.0, 1080.0);
         let columns = width >= 720.0;
-        let result_y = 190.0;
+        let result_y = 187.0;
         let result_height = if columns { 112.0 } else { 294.0 };
         let sample_own_row = width < 640.0;
-        let batch_y = result_y + result_height + if sample_own_row { 78.0 } else { 44.0 };
-        let status_y = batch_y + 126.0;
+        let batch_y = result_y + result_height + if sample_own_row { 90.0 } else { 54.0 };
+        let export_y = batch_y + 112.0 + 16.0;
+        let status_y = export_y + EXPORT_HEIGHT + 16.0;
         Self {
             margin,
             width,
             result_y,
             result_height,
             batch_y,
+            export_y,
             status_y,
-            content_height: status_y
-                + if export_visible {
-                    EXPORT_OFFSET + EXPORT_HEIGHT + 16.0
-                } else {
-                    68.0
-                },
+            content_height: status_y + if status_visible { 80.0 } else { 0.0 },
             columns,
             sample_own_row,
         }
@@ -675,7 +672,7 @@ unsafe fn place(hwnd: Hwnd, x: f32, y: f32, width: f32, height: f32, dpi: u32, s
             pixels(y, dpi) - scroll,
             pixels(width, dpi),
             pixels(height, dpi),
-            SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
         );
     }
 }
@@ -696,8 +693,9 @@ unsafe fn reflow(hwnd: Hwnd) {
     }
     let dpi = unsafe { (*state).dpi };
     let width = client.right as f32 * 96.0 / dpi as f32;
-    let export_visible = unsafe { IsWindowVisible((*state).export) != 0 };
-    let layout = Layout::new(width, export_visible);
+    let status_visible = unsafe { GetWindowTextLengthW((*state).progress) > 0 };
+    let layout = Layout::new(width, status_visible);
+    let columns_changed = unsafe { (*state).layout.columns != layout.columns };
     let max_scroll = (pixels(layout.content_height, dpi) - client.bottom).max(0);
     let scroll = unsafe { (*state).scroll.clamp(0, max_scroll) };
     let visible = max_scroll > 0;
@@ -760,7 +758,7 @@ unsafe fn reflow(hwnd: Hwnd) {
         place(
             (*state).caveat,
             left,
-            layout.result_y + layout.result_height + 7.0,
+            layout.result_y + layout.result_height + 12.0,
             if layout.sample_own_row {
                 full
             } else {
@@ -773,7 +771,9 @@ unsafe fn reflow(hwnd: Hwnd) {
         place(
             (*state).sample,
             left + full - 154.0,
-            layout.result_y + layout.result_height + if layout.sample_own_row { 38.0 } else { 5.0 },
+            layout.result_y
+                + layout.result_height
+                + if layout.sample_own_row { 46.0 } else { 10.0 },
             154.0,
             32.0,
             dpi,
@@ -793,19 +793,22 @@ unsafe fn reflow(hwnd: Hwnd) {
             left,
             layout.status_y,
             full,
-            if export_visible { EXPORT_OFFSET } else { 64.0 },
+            64.0,
             dpi,
             content_scroll,
         );
         place(
             (*state).export,
             left,
-            layout.status_y + EXPORT_OFFSET,
+            layout.export_y,
             full,
             EXPORT_HEIGHT,
             dpi,
             content_scroll,
         );
+        if columns_changed {
+            InvalidateRect((*state).result, null(), 1);
+        }
         InvalidateRect(hwnd, null(), 1);
     }
 }
@@ -911,21 +914,6 @@ unsafe fn alert(hwnd: Hwnd, message: &str, error: bool) {
 
 fn extension(input: &Path) -> &str {
     input.extension().and_then(|s| s.to_str()).unwrap_or("")
-}
-
-fn visible_output_path(path: &Path) -> String {
-    let full = path.display().to_string();
-    if full.chars().count() <= 55 {
-        return full;
-    }
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let chars: Vec<char> = name.chars().collect();
-    if chars.len() <= 34 {
-        return name.into_owned();
-    }
-    let start: String = chars[..14].iter().collect();
-    let end: String = chars[chars.len() - 17..].iter().collect();
-    format!("{start}…{end}")
 }
 
 fn save_sample(owner: Hwnd) -> Result<(), String> {
@@ -1051,6 +1039,17 @@ unsafe fn choose_file(
     ))
 }
 
+unsafe fn set_batch_status(hwnd: Hwnd, state: *mut UiState, message: &str) {
+    unsafe {
+        set_text((*state).progress, message);
+        ShowWindow(
+            (*state).progress,
+            if message.is_empty() { SW_HIDE } else { SW_SHOW },
+        );
+        reflow(hwnd);
+    }
+}
+
 unsafe fn begin_import(hwnd: Hwnd, state: *mut UiState, selected: Option<PathBuf>) {
     unsafe {
         if (*state).busy {
@@ -1066,17 +1065,16 @@ unsafe fn begin_import(hwnd: Hwnd, state: *mut UiState, selected: Option<PathBuf
             }
         };
         if !drop_files::supported_input(&input) || !input.is_file() {
-            set_text((*state).progress, "请选择一个 .xls、.xlsx 或 .csv 文件。");
+            set_batch_status(hwnd, state, "请选择一个 .xls、.xlsx 或 .csv 文件。");
             alert(hwnd, "请选择一个 .xls、.xlsx 或 .csv 文件。", true);
             (*state).busy = false;
             return;
         }
         (*state).prepared = None;
         (*state).source_path = None;
-        ShowWindow((*state).export, SW_HIDE);
+        EnableWindow((*state).export, 0);
         EnableWindow((*state).import, 0);
-        set_text((*state).progress, "正在读取并查询，请稍候…");
-        reflow(hwnd);
+        set_batch_status(hwnd, state, "正在读取并查询，请稍候…");
         let database = Arc::clone(&(*state).database);
         let (sender, receiver) = mpsc::channel();
         (*state).receiver = Some(receiver);
@@ -1096,7 +1094,7 @@ fn handle_drop(hwnd: Hwnd, choice: drop_files::DropChoice) {
     match choice {
         drop_files::DropChoice::File(path) => unsafe { begin_import(hwnd, state, Some(path)) },
         drop_files::DropChoice::Error(reason) => unsafe {
-            set_text((*state).progress, reason);
+            set_batch_status(hwnd, state, reason);
             alert(hwnd, reason, true);
         },
     }
@@ -1149,11 +1147,11 @@ unsafe fn begin_export(hwnd: Hwnd, state: *mut UiState) {
         }
         EnableWindow((*state).import, 0);
         EnableWindow((*state).export, 0);
-        set_text((*state).progress, "正在保存结果，请稍候…");
+        set_batch_status(hwnd, state, "正在保存结果，请稍候…");
         let (sender, receiver) = mpsc::channel();
         (*state).receiver = Some(receiver);
         std::thread::spawn(move || {
-            let result = batch::export_prepared(&prepared, &output).map(|()| output);
+            let result = batch::export_prepared(&prepared, &output);
             let _ = sender.send(WorkerResult::Exported(result));
         });
         SetTimer(hwnd, TIMER_WORK, 100, null_mut());
@@ -1285,7 +1283,8 @@ unsafe extern "system" fn window_proc(
                     [0, 0, 1, 1],
                     font,
                 );
-                ShowWindow(export, SW_HIDE);
+                EnableWindow(export, 0);
+                ShowWindow(progress, SW_HIDE);
                 let sample = create_control(
                     hwnd,
                     "BUTTON",
@@ -1405,44 +1404,28 @@ unsafe extern "system" fn window_proc(
                     (*state).busy = false;
                     KillTimer(hwnd, TIMER_WORK);
                     EnableWindow((*state).import, 1);
-                    EnableWindow((*state).export, 1);
                 }
                 match result {
-                    Ok(WorkerResult::Imported(source, Ok(prepared))) => {
-                        let summary = prepared.summary;
-                        let detail = format!(
-                            "已查询 {} 行，查到 {} 行；格式错误 {} 行，未收录 {} 行，空行 {} 行。点击“导出结果”保存。",
-                            summary.rows,
-                            summary.found,
-                            summary.invalid,
-                            summary.missing,
-                            summary.empty
-                        );
-                        unsafe {
+                    Ok(WorkerResult::Imported(source, Ok(prepared))) => unsafe {
+                        if !prepared.is_empty() {
                             (*state).prepared = Some(Arc::new(prepared));
                             (*state).source_path = Some(source);
-                            set_text((*state).progress, &detail);
-                            ShowWindow((*state).export, SW_SHOW);
-                            // Bring the completed import and its export action into view.
-                            (*state).scroll = i32::MAX;
-                            reflow(hwnd);
                         }
-                    }
+                        set_batch_status(hwnd, state, "");
+                    },
                     Ok(WorkerResult::Imported(_, Err(reason))) => unsafe {
-                        set_text((*state).progress, "导入失败。请检查文件后重试。");
+                        set_batch_status(hwnd, state, "导入失败。请检查文件后重试。");
                         alert(hwnd, &reason, true);
                     },
-                    Ok(WorkerResult::Exported(Ok(path))) => unsafe {
-                        set_text(
-                            (*state).progress,
-                            &format!("已保存：{}", visible_output_path(&path)),
-                        );
+                    Ok(WorkerResult::Exported(Ok(()))) => unsafe {
+                        set_batch_status(hwnd, state, "");
                     },
                     Ok(WorkerResult::Exported(Err(reason))) | Err(reason) => unsafe {
-                        set_text((*state).progress, "处理失败。可重试导入或导出。");
+                        set_batch_status(hwnd, state, "处理失败。可重试导入或导出。");
                         alert(hwnd, &reason, true);
                     },
                 }
+                unsafe { EnableWindow((*state).export, (*state).prepared.is_some() as i32) };
             }
             0
         }
@@ -1667,17 +1650,24 @@ unsafe extern "system" fn window_proc(
                             colors.accent_text
                         };
                         let _ = canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 14.0, rgb(fill));
-                        if disabled || selected || focused {
-                            let _ = canvas.stroke_round_rect(
-                                1.0,
-                                1.0,
-                                w - 2.0,
-                                h - 2.0,
-                                14.0,
-                                if focused { 2.0 } else { 1.0 },
-                                rgb(colors.text),
-                            );
-                        }
+                        let border = if disabled {
+                            colors.disabled
+                        } else if selected {
+                            colors.text
+                        } else if focused {
+                            colors.accent_text
+                        } else {
+                            colors.accent
+                        };
+                        let _ = canvas.stroke_round_rect(
+                            1.0,
+                            1.0,
+                            w - 2.0,
+                            h - 2.0,
+                            14.0,
+                            if focused { 2.0 } else { 1.0 },
+                            rgb(border),
+                        );
                         unsafe {
                             draw_text(
                                 item.dc,
@@ -1999,9 +1989,8 @@ unsafe extern "system" fn window_proc(
         WM_CLOSE => {
             let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
             if !state.is_null() && unsafe { (*state).busy } {
-                let progress = unsafe { (*state).progress };
                 unsafe {
-                    set_text(progress, "正在处理文件。处理完成后即可关闭窗口。")
+                    set_batch_status(hwnd, state, "正在处理文件。处理完成后即可关闭窗口。")
                 };
                 return 0;
             }
@@ -2140,13 +2129,5 @@ mod tests {
             assert!(contrast(colors.disabled, colors.button) >= 3.0);
             assert!(contrast(colors.accent_text, colors.accent) >= 7.0);
         }
-    }
-
-    #[test]
-    fn long_output_path_keeps_a_readable_filename() {
-        let path = std::path::Path::new(
-            r"C:\Users\Example\Very Long Directory Name\Another Long Directory\result.csv",
-        );
-        assert_eq!(super::visible_output_path(path), "result.csv");
     }
 }
