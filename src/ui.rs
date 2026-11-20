@@ -39,6 +39,10 @@ const WM_DRAWITEM: u32 = 0x002B;
 const WM_SETFONT: u32 = 0x0030;
 const WM_KEYDOWN: u32 = 0x0100;
 const EM_SETCUEBANNER: u32 = 0x1501;
+const WM_SETICON: u32 = 0x0080;
+const ICON_SMALL: usize = 0;
+const IMAGE_ICON: u32 = 1;
+const LR_SHARED: u32 = 0x8000;
 const VK_RETURN: usize = 13;
 const GWLP_USERDATA: i32 = -21;
 const SW_SHOW: i32 = 5;
@@ -71,7 +75,6 @@ const SPI_GETHIGHCONTRAST: u32 = 0x0042;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const HCF_HIGHCONTRASTON: u32 = 1;
 const RRF_RT_REG_DWORD: u32 = 0x00000018;
-const DT_CENTER: u32 = 1;
 const DT_VCENTER: u32 = 4;
 const DT_SINGLELINE: u32 = 0x20;
 const TRANSPARENT: i32 = 1;
@@ -208,6 +211,14 @@ unsafe extern "system" {
     fn GetSysColorBrush(index: i32) -> Handle;
     fn LoadCursorW(instance: Handle, name: *const u16) -> Handle;
     fn LoadIconW(instance: Handle, name: *const u16) -> Handle;
+    fn LoadImageW(
+        instance: Handle,
+        name: *const u16,
+        image_type: u32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> Handle;
     fn GetSystemMetrics(index: i32) -> i32;
     fn IsDialogMessageW(hwnd: Hwnd, message: *const Message) -> i32;
     fn GetSysColor(index: i32) -> u32;
@@ -215,7 +226,6 @@ unsafe extern "system" {
     fn RedrawWindow(hwnd: Hwnd, rect: *const Rect, region: Handle, flags: u32) -> i32;
     fn FillRect(dc: Handle, rect: *const Rect, brush: Handle) -> i32;
     fn DrawTextW(dc: Handle, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
-    fn DrawFocusRect(dc: Handle, rect: *const Rect) -> i32;
     fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
 }
 
@@ -255,6 +265,9 @@ unsafe extern "system" {
         ellipse_height: i32,
     ) -> i32;
     fn Ellipse(dc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
+    fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
+    fn GetStockObject(index: i32) -> Handle;
     fn SetTextColor(dc: Handle, color: u32) -> u32;
     fn SetBkColor(dc: Handle, color: u32) -> u32;
     fn SetBkMode(dc: Handle, mode: i32) -> i32;
@@ -521,6 +534,21 @@ fn extension(input: &Path) -> &str {
     input.extension().and_then(|s| s.to_str()).unwrap_or("")
 }
 
+fn visible_output_path(path: &Path) -> String {
+    let full = path.display().to_string();
+    if full.chars().count() <= 55 {
+        return full;
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= 34 {
+        return name.into_owned();
+    }
+    let start: String = chars[..14].iter().collect();
+    let end: String = chars[chars.len() - 17..].iter().collect();
+    format!("{start}…{end}")
+}
+
 unsafe fn file_dialog(
     owner: Hwnd,
     save: bool,
@@ -675,6 +703,17 @@ unsafe extern "system" fn window_proc(
                     return -1;
                 }
                 let theme = Theme::read(hwnd);
+                let small_icon = LoadImageW(
+                    GetModuleHandleW(null()),
+                    APP_ICON as *const u16,
+                    IMAGE_ICON,
+                    GetSystemMetrics(49),
+                    GetSystemMetrics(50),
+                    LR_SHARED,
+                );
+                if !small_icon.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small_icon as isize);
+                }
                 let compact = work_area().bottom - work_area().top < 610;
                 create_control(
                     hwnd,
@@ -706,12 +745,12 @@ unsafe extern "system" fn window_proc(
                     input,
                     EM_SETCUEBANNER,
                     1,
-                    wide("例如 13213000000").as_ptr() as isize,
+                    wide("输入或粘贴手机号").as_ptr() as isize,
                 );
                 let import = create_control(
                     hwnd,
                     "BUTTON",
-                    "＋  导入文件",
+                    "导入文件",
                     WS_TABSTOP | BS_OWNERDRAW,
                     ID_IMPORT,
                     if compact {
@@ -824,6 +863,11 @@ unsafe extern "system" fn window_proc(
                     let input = unsafe { text_of(input_hwnd) };
                     let found = database.lookup(&input);
                     let success = found.status == Status::Found;
+                    let compact = unsafe { (*state_ptr).compact };
+                    let normal_font = unsafe { (*state_ptr).input_font };
+                    let smaller_font = unsafe { (*state_ptr).font };
+                    let long_result = found.carrier.chars().count() > if compact { 14 } else { 18 }
+                        || found.province.chars().count() + found.city.chars().count() > 20;
                     let detail = match found.status {
                         Status::Found => format!(
                             "{}\r\n{}  {}",
@@ -842,6 +886,16 @@ unsafe extern "system" fn window_proc(
                         Status::Empty => "请输入手机号。".to_string(),
                     };
                     unsafe {
+                        SendMessageW(
+                            result_hwnd,
+                            WM_SETFONT,
+                            if long_result {
+                                smaller_font
+                            } else {
+                                normal_font
+                            } as usize,
+                            1,
+                        );
                         set_text(label_hwnd, if success { "号段查询结果" } else { "" });
                         set_text(result_hwnd, &detail);
                         set_text(
@@ -948,7 +1002,7 @@ unsafe extern "system" fn window_proc(
                     Ok((path, summary)) => {
                         let detail = format!(
                             "已保存：{}\r\n共 {} 行，查到 {} 行；格式错误 {} 行，未收录 {} 行，空行 {} 行。",
-                            path.display(),
+                            visible_output_path(&path),
                             summary.rows,
                             summary.found,
                             summary.invalid,
@@ -1041,33 +1095,25 @@ unsafe extern "system" fn window_proc(
             let accent_brush = unsafe { (*state).theme.accent_brush };
             let border_pen = unsafe { (*state).theme.border_pen };
             let accent_pen = unsafe { (*state).theme.accent_pen };
-            let font = unsafe {
-                if item.control_id == ID_QUERY as u32 {
-                    (*state).input_font
-                } else {
-                    (*state).font
-                }
-            };
+            let font = unsafe { (*state).font };
             let disabled = item.state & ODS_DISABLED != 0;
             let selected = item.state & ODS_SELECTED != 0;
             let query = item.control_id == ID_QUERY as u32;
-            let text_color = if query || selected && high_contrast {
+            let text_color = if query && selected {
+                colors.text
+            } else if query || selected && high_contrast {
                 colors.accent_text
             } else if disabled {
                 colors.disabled
             } else {
                 colors.button_text
             };
-            let label = if query {
-                "↑".to_string()
-            } else {
-                unsafe { text_of(item.hwnd) }
-            };
-            let mut rect = item.rect;
+            let rect = item.rect;
             unsafe {
                 FillRect(item.dc, &rect, field_brush);
                 if query {
-                    let old_brush = SelectObject(item.dc, accent_brush);
+                    let old_brush =
+                        SelectObject(item.dc, if selected { field_brush } else { accent_brush });
                     let old_pen = SelectObject(item.dc, accent_pen);
                     Ellipse(
                         item.dc,
@@ -1098,24 +1144,69 @@ unsafe extern "system" fn window_proc(
                     SelectObject(item.dc, old_pen);
                     SelectObject(item.dc, old_brush);
                 }
-                SelectObject(item.dc, font);
                 SetBkMode(item.dc, TRANSPARENT);
-                SetTextColor(item.dc, text_color);
-                DrawTextW(
-                    item.dc,
-                    wide(&label).as_ptr(),
-                    -1,
-                    &mut rect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                );
-                if item.state & ODS_FOCUS != 0 {
-                    let focus = Rect {
-                        left: rect.left + 4,
-                        top: rect.top + 4,
-                        right: rect.right - 4,
-                        bottom: rect.bottom - 4,
+                let cx = (rect.left + rect.right) / 2;
+                let cy = (rect.top + rect.bottom) / 2;
+                let stroke = CreatePen(0, if query { 3 } else { 2 }, text_color);
+                let old_pen = SelectObject(item.dc, stroke);
+                if query {
+                    MoveToEx(item.dc, cx, cy + 10, null_mut());
+                    LineTo(item.dc, cx, cy - 10);
+                    MoveToEx(item.dc, cx - 8, cy - 2, null_mut());
+                    LineTo(item.dc, cx, cy - 10);
+                    LineTo(item.dc, cx + 8, cy - 2);
+                } else {
+                    let plus_x = rect.left + 24;
+                    MoveToEx(item.dc, plus_x - 6, cy, null_mut());
+                    LineTo(item.dc, plus_x + 6, cy);
+                    MoveToEx(item.dc, plus_x, cy - 6, null_mut());
+                    LineTo(item.dc, plus_x, cy + 6);
+                    let old_font = SelectObject(item.dc, font);
+                    SetTextColor(item.dc, text_color);
+                    let label = text_of(item.hwnd);
+                    let mut label_rect = Rect {
+                        left: rect.left + 43,
+                        top: rect.top,
+                        right: rect.right,
+                        bottom: rect.bottom,
                     };
-                    DrawFocusRect(item.dc, &focus);
+                    DrawTextW(
+                        item.dc,
+                        wide(&label).as_ptr(),
+                        -1,
+                        &mut label_rect,
+                        DT_VCENTER | DT_SINGLELINE,
+                    );
+                    SelectObject(item.dc, old_font);
+                }
+                SelectObject(item.dc, old_pen);
+                DeleteObject(stroke);
+                if item.state & ODS_FOCUS != 0 {
+                    let ring = CreatePen(0, 2, text_color);
+                    let old_pen = SelectObject(item.dc, ring);
+                    let old_brush = SelectObject(item.dc, GetStockObject(5));
+                    if query {
+                        Ellipse(
+                            item.dc,
+                            rect.left + 6,
+                            rect.top + 6,
+                            rect.right - 6,
+                            rect.bottom - 6,
+                        );
+                    } else {
+                        RoundRect(
+                            item.dc,
+                            rect.left + 3,
+                            rect.top + 3,
+                            rect.right - 3,
+                            rect.bottom - 3,
+                            18,
+                            18,
+                        );
+                    }
+                    SelectObject(item.dc, old_brush);
+                    SelectObject(item.dc, old_pen);
+                    DeleteObject(ring);
                 }
             }
             1
@@ -1262,8 +1353,18 @@ mod tests {
             let colors = colors_for_mode(dark);
             assert!(contrast(colors.text, colors.surface) >= 4.5);
             assert!(contrast(colors.text, colors.field) >= 4.5);
+            assert!(contrast(colors.muted, colors.surface) >= 4.5);
             assert!(contrast(colors.button_text, colors.button) >= 4.5);
             assert!(contrast(colors.disabled, colors.button) >= 3.0);
+            assert!(contrast(colors.accent_text, colors.accent) >= 7.0);
         }
+    }
+
+    #[test]
+    fn long_output_path_keeps_a_readable_filename() {
+        let path = std::path::Path::new(
+            r"C:\Users\Example\Very Long Directory Name\Another Long Directory\result.csv",
+        );
+        assert_eq!(super::visible_output_path(path), "result.csv");
     }
 }

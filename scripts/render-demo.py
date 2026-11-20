@@ -8,9 +8,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
 
-WIDTH, HEIGHT = 1140, 620
-SHOT_BOX = (24, 24, 802, 596)
-PANEL_LEFT = 836
+WIDTH, HEIGHT = 1200, 660
+SHOT_BOX = (18, 18, 868, 642)
+PANEL_LEFT = 902
 SCENES = [
     ("01-empty.png", 700, "输入手机号", "Enter a mobile number"),
     ("02-single-result.png", 1400, "查看单号结果", "See the result instantly"),
@@ -45,14 +45,12 @@ def font(size, bold=False):
 def theme_colours(theme):
     if theme == "dark":
         return {
-            "canvas": "#151a1d", "panel": "#22292d", "ink": "#f3f6f5",
-            "muted": "#b8c9c6", "accent": "#73d5bf", "line": "#415055",
-            "table": "#20282c", "table_head": "#30443f",
+            "canvas": "#1e1e1e", "ink": "#f3f3f3", "muted": "#c4c4c4",
+            "line": "#555555", "table": "#242424", "table_head": "#303030",
         }
     return {
-        "canvas": "#edf3f2", "panel": "#ffffff", "ink": "#172d31",
-        "muted": "#435d60", "accent": "#087360", "line": "#c7d7d6",
-        "table": "#ffffff", "table_head": "#e3f0eb",
+        "canvas": "#fafafa", "ink": "#202020", "muted": "#555555",
+        "line": "#d3d3d3", "table": "#ffffff", "table_head": "#f0f0f0",
     }
 
 
@@ -64,6 +62,16 @@ def check_captures(frames):
             shot = opened.convert("RGB")
         if min(shot.size) < 350 or max(ImageStat.Stat(shot).stddev) < 8:
             raise ValueError(f"Unusable Windows capture: {frames / name}")
+        if name not in {"08-open-dialog.png", "09-save-dialog.png"}:
+            contaminated_rows = 0
+            for y in range(shot.height - 3, shot.height):
+                blue_pixels = sum(
+                    blue > red + 40 and blue > green + 15
+                    for red, green, blue in (shot.getpixel((x, y)) for x in range(shot.width))
+                )
+                contaminated_rows += blue_pixels > shot.width * 0.75
+            if contaminated_rows >= 2:
+                raise ValueError(f"Desktop is visible below the application: {frames / name}")
 
 
 def check_theme_difference(light, dark):
@@ -103,7 +111,7 @@ def draw_table(draw, rows, colours):
     column_x = (x0 + 20, x0 + 195, x0 + 352, x0 + 506)
     for x, value in zip(column_x, rows[0]):
         draw.text((x, y0 + 104), value, font=font(17, True),
-                  fill=colours["accent"], anchor="lm")
+                  fill=colours["ink"], anchor="lm")
     for index, row in enumerate(rows[1:]):
         y = y0 + 163 + index * 70
         for x, value in zip(column_x, row):
@@ -118,20 +126,15 @@ def render_scene(frames, scene, theme):
     colours = theme_colours(theme)
     canvas = Image.new("RGB", (WIDTH, HEIGHT), colours["canvas"])
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((PANEL_LEFT, 24, WIDTH - 24, HEIGHT - 24), radius=14,
-                           fill=colours["panel"], outline=colours["line"], width=1)
-    draw.text((PANEL_LEFT + 26, 78), "手机号归属地", font=font(23, True),
+    draw.line((PANEL_LEFT - 18, 24, PANEL_LEFT - 18, HEIGHT - 24),
+              fill=colours["line"], width=2)
+    draw.text((PANEL_LEFT, 195), title, font=font(27, True),
               fill=colours["ink"], anchor="lm")
-    draw.text((PANEL_LEFT + 26, 114), "Offline phone lookup", font=font(16),
-              fill=colours["muted"], anchor="lm")
-    draw.line((PANEL_LEFT + 26, 150, WIDTH - 50, 150), fill=colours["line"], width=2)
-    draw.text((PANEL_LEFT + 26, 223), title, font=font(26, True),
-              fill=colours["ink"], anchor="lm")
-    draw.text((PANEL_LEFT + 26, 260), english, font=font(16),
+    draw.text((PANEL_LEFT, 240), english, font=font(17),
               fill=colours["muted"], anchor="lm")
     mode = "深色模式  Dark" if theme == "dark" else "浅色模式  Light"
-    draw.text((PANEL_LEFT + 26, HEIGHT - 67), mode, font=font(16),
-              fill=colours["accent"], anchor="lm")
+    draw.text((PANEL_LEFT, HEIGHT - 49), mode, font=font(16),
+              fill=colours["muted"], anchor="lm")
 
     if name.endswith(".csv"):
         draw_table(draw, read_result(frames / name), colours)
@@ -139,7 +142,7 @@ def render_scene(frames, scene, theme):
         with Image.open(frames / name) as opened:
             shot = opened.convert("RGB")
         x0, y0, x1, y1 = SHOT_BOX
-        shot = ImageOps.contain(shot, (x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        shot.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
         canvas.paste(shot, (x0 + (x1 - x0 - shot.width) // 2,
                             y0 + (y1 - y0 - shot.height) // 2))
     return canvas.quantize(colors=256, method=Image.Quantize.MEDIANCUT,

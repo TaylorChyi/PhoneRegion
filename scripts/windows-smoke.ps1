@@ -96,6 +96,9 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr window, uint attribute,
+        out WindowRect bounds, int size);
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool PrintWindow(IntPtr window, IntPtr deviceContext, uint flags);
@@ -186,12 +189,22 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame)
 
 function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
     if (-not $DemoDirectory) { return }
-    $rect = [NativeWindow+WindowRect]::new()
-    if (-not [NativeWindow]::GetWindowRect($Window, [ref]$rect)) {
+    $full = [NativeWindow+WindowRect]::new()
+    if (-not [NativeWindow]::GetWindowRect($Window, [ref]$full)) {
         throw "Could not locate the demo window for '$Name'."
     }
-    $width = $rect.right - $rect.left
-    $height = $rect.bottom - $rect.top
+    $visible = [NativeWindow+WindowRect]::new()
+    $status = [NativeWindow]::DwmGetWindowAttribute($Window, 9, [ref]$visible,
+        [System.Runtime.InteropServices.Marshal]::SizeOf($visible))
+    if ($status -ne 0) {
+        throw "Could not determine the visible window bounds for '$Name' (DWM $status)."
+    }
+    if ($visible.left -lt $full.left -or $visible.top -lt $full.top -or
+        $visible.right -gt $full.right -or $visible.bottom -gt $full.bottom) {
+        throw "The visible frame extends outside the window rectangle for '$Name'."
+    }
+    $width = $visible.right - $visible.left
+    $height = $visible.bottom - $visible.top
     if ($width -lt 200 -or $height -lt 200) {
         throw "The demo window has unexpected dimensions: ${width}x${height}."
     }
@@ -201,18 +214,33 @@ function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
         [void][NativeWindow]::SetForegroundWindow($Window)
         Start-Sleep -Milliseconds 180
         if ([NativeWindow]::GetForegroundWindow() -eq $Window) {
-            $graphics.CopyFromScreen($rect.left, $rect.top, 0, 0,
+            $graphics.CopyFromScreen($visible.left, $visible.top, 0, 0,
                 [System.Drawing.Size]::new($width, $height))
         }
         else {
-            $deviceContext = $graphics.GetHdc()
+            $fullWidth = $full.right - $full.left
+            $fullHeight = $full.bottom - $full.top
+            $fullBitmap = [System.Drawing.Bitmap]::new($fullWidth, $fullHeight)
+            $fullGraphics = [System.Drawing.Graphics]::FromImage($fullBitmap)
             try {
-                if (-not [NativeWindow]::PrintWindow($Window, $deviceContext, 2)) {
-                    throw "Could not capture the demo window for '$Name'."
+                $deviceContext = $fullGraphics.GetHdc()
+                try {
+                    if (-not [NativeWindow]::PrintWindow($Window, $deviceContext, 2)) {
+                        throw "Could not capture the demo window for '$Name'."
+                    }
                 }
+                finally {
+                    $fullGraphics.ReleaseHdc($deviceContext)
+                }
+                $source = [System.Drawing.Rectangle]::new(
+                    $visible.left - $full.left, $visible.top - $full.top, $width, $height)
+                $destination = [System.Drawing.Rectangle]::new(0, 0, $width, $height)
+                $graphics.DrawImage($fullBitmap, $destination, $source,
+                    [System.Drawing.GraphicsUnit]::Pixel)
             }
             finally {
-                $graphics.ReleaseHdc($deviceContext)
+                $fullGraphics.Dispose()
+                $fullBitmap.Dispose()
             }
         }
         $bitmap.Save((Join-Path $DemoDirectory $Name),
