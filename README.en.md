@@ -4,7 +4,9 @@
 
 <p align="center"><strong>Offline mobile number lookup for mainland China</strong></p>
 
-<p align="center"><a href="README.md">简体中文</a> · <strong>English</strong></p>
+<p align="center">PhoneRegion is an offline phone number lookup tool for Windows. Enter a mainland Chinese mobile number for a carrier lookup by its seven-digit prefix, or enrich an Excel or CSV list with the original carrier, province and prefecture-level area for each number.</p>
+
+<p align="center"><a href="README.md">简体中文</a> · <strong>English</strong> · <a href="#agent-reference">Agent reference</a></p>
 
 <p align="center">
   <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TaylorChyi/PhoneRegion?label=Release&amp;color=176b50"></a>
@@ -78,3 +80,18 @@
 <p align="center">The carrier, province and prefecture reflect the original prefix allocation. The current carrier may differ after number porting. A prefix cannot identify a phone’s current location. Where available, the virtual operator’s brand appears alongside the underlying carrier.</p>
 
 <p align="center">The area field uses the official name of the city, autonomous prefecture, prefecture, league or municipality. It stays blank when only the province is known. Invalid numbers and unlisted prefixes remain in the export with all three lookup fields blank. <a href="data/SOURCE.md">Data source</a></p>
+
+<a name="agent-reference"></a>
+<h2 align="center">Using PhoneRegion with a desktop agent</h2>
+
+<p align="center">Suppose a user has a CSV of mobile numbers and wants a count by province. An agent with Windows desktop access can import the list through the PhoneRegion window, export the results and group the rows by <code>归属地省份</code> (province).</p>
+
+<table align="center">
+  <thead><tr><th>Task</th><th>Resource and usage</th></tr></thead>
+  <tbody>
+    <tr><td>Identify or cite the project</td><td>The GitHub repository is <a href="https://github.com/TaylorChyi/PhoneRegion"><code>TaylorChyi/PhoneRegion</code></a>. To cite a specific version, use the <code>html_url</code> from that release’s metadata.</td></tr>
+    <tr><td>Get the Windows build</td><td>Read the <a href="https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest">latest release metadata (JSON)</a>. The version is in <code>tag_name</code>. In <code>assets</code>, select <code>PhoneRegion.exe</code> by name and download it from its <code>browser_download_url</code>.</td></tr>
+    <tr><td>Verify a batch lookup</td><td>Import the <a href="docs/example.csv">sample CSV from the repository</a>. Its first number, <code>132 1300 0000</code>, should export as <code>13213000000,中国联通,河南省,郑州市</code>.</td></tr>
+    <tr><td>Read the exported file</td><td>CSV output is UTF-8 with a BOM. The header is <code>手机号,运营商,归属地省份,归属地地级市</code> (mobile number, carrier, province, prefecture-level area). Read phone numbers as text and preserve empty fields. <a href="src/batch.rs">Import and export implementation</a></td></tr>
+  </tbody>
+</table>

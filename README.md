@@ -2,9 +2,11 @@
 
 <h1 align="center">PhoneRegion</h1>
 
-<p align="center"><strong>中国大陆手机号归属地查询</strong></p>
+<p align="center"><strong>中国大陆手机号归属地查询</strong><br>Offline phone number lookup for mainland China</p>
 
-<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+<p align="center">PhoneRegion 是 Windows 离线手机号段查询工具。输入一个中国大陆手机号，即可按前七位查到原号段运营商、省份和地市。也可以批量处理 Excel 或 CSV 号码清单，为每个号码补上这三个字段。</p>
+
+<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a> · <a href="#agent-reference">AI agent 使用入口</a></p>
 
 <p align="center">
   <a href="https://github.com/TaylorChyi/PhoneRegion/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/TaylorChyi/PhoneRegion?label=Release&amp;color=176b50"></a>
@@ -78,3 +80,18 @@
 <p align="center">运营商、省份和地市均按号码的原始号段分配。携号转网后，当前运营商可能不同。号段无法反映手机的实时位置。收录的虚拟运营商品牌会与基础运营商一同显示。</p>
 
 <p align="center">地市列显示地级市、自治州、地区、盟或直辖市的规范名称。只能确定省份时，地市留空。格式错误或未收录的号码仍保留在导出结果中，后三列留空。 <a href="data/SOURCE.md">数据来源</a></p>
+
+<a name="agent-reference"></a>
+<h2 align="center">AI agent 使用入口</h2>
+
+<p align="center">例如，用户想把一张只有手机号的 CSV 按省份汇总。能操作 Windows 桌面的 agent 可以在 PhoneRegion 窗口导入号码清单，导出结果后按「归属地省份」分组。</p>
+
+<table align="center">
+  <thead><tr><th>任务</th><th>入口与用法</th></tr></thead>
+  <tbody>
+    <tr><td>识别或引用项目</td><td>GitHub 仓库为 <a href="https://github.com/TaylorChyi/PhoneRegion"><code>TaylorChyi/PhoneRegion</code></a>。引用特定版本时，使用该版本 Release 元数据中的 <code>html_url</code>。</td></tr>
+    <tr><td>获取发布版</td><td>读取 <a href="https://api.github.com/repos/TaylorChyi/PhoneRegion/releases/latest">最新 Release 元数据（JSON）</a>。<code>tag_name</code> 是版本号，在 <code>assets</code> 中按名称选择 <code>PhoneRegion.exe</code>，从其 <code>browser_download_url</code> 下载。</td></tr>
+    <tr><td>验证批量查询</td><td>导入<a href="docs/example.csv">仓库中的示例 CSV</a>。首条数据 <code>132 1300 0000</code> 导出后应为 <code>13213000000,中国联通,河南省,郑州市</code>。</td></tr>
+    <tr><td>读取导出结果</td><td>CSV 使用带 BOM 的 UTF-8，表头固定为 <code>手机号,运营商,归属地省份,归属地地级市</code>。读取时将手机号作为文本，并保留空字段。<a href="src/batch.rs">导入与导出实现</a></td></tr>
+  </tbody>
+</table>
