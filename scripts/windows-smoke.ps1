@@ -1,11 +1,13 @@
 param(
     [string]$ExePath = './target/release/PhoneRegion.exe',
-    [switch]$BlockNetwork
+    [switch]$BlockNetwork,
+    [string]$DemoDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -90,6 +92,15 @@ public static class NativeWindow
     public static extern IntPtr GetForegroundWindow();
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct WindowRect { public int left, top, right, bottom; }
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PrintWindow(IntPtr window, IntPtr deviceContext, uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct GuiThreadInfo {
         public int size, flags;
         public IntPtr active, focus, capture, menu, move, caret;
@@ -148,7 +159,7 @@ function Wait-Dialog([string]$Title, [int]$ProcessId) {
     throw "The '$Title' file dialog did not appear within 10 seconds."
 }
 
-function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
+function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame) {
     # Explorer uses different child IDs for Open and Save. Alt+N focuses the
     # filename editor in both dialogs on the Windows runner's English desktop.
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -162,6 +173,7 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
                 Start-Sleep -Milliseconds 350
                 $focused = [NativeWindow]::FocusedControl($Dialog)
                 if ($focused -ne [IntPtr]::Zero -and (Read-WindowText $focused) -eq $Path) {
+                    if ($DemoFrame) { Save-DemoFrame $Dialog $DemoFrame }
                     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
                     return
                 }
@@ -172,8 +184,59 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
     throw "The filename edit did not retain '$Path'."
 }
 
+function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
+    if (-not $DemoDirectory) { return }
+    $rect = [NativeWindow+WindowRect]::new()
+    if (-not [NativeWindow]::GetWindowRect($Window, [ref]$rect)) {
+        throw "Could not locate the demo window for '$Name'."
+    }
+    $width = $rect.right - $rect.left
+    $height = $rect.bottom - $rect.top
+    if ($width -lt 200 -or $height -lt 200) {
+        throw "The demo window has unexpected dimensions: ${width}x${height}."
+    }
+    $bitmap = [System.Drawing.Bitmap]::new($width, $height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    try {
+        [void][NativeWindow]::SetForegroundWindow($Window)
+        Start-Sleep -Milliseconds 180
+        if ([NativeWindow]::GetForegroundWindow() -eq $Window) {
+            $graphics.CopyFromScreen($rect.left, $rect.top, 0, 0,
+                [System.Drawing.Size]::new($width, $height))
+        }
+        else {
+            $deviceContext = $graphics.GetHdc()
+            try {
+                if (-not [NativeWindow]::PrintWindow($Window, $deviceContext, 2)) {
+                    throw "Could not capture the demo window for '$Name'."
+                }
+            }
+            finally {
+                $graphics.ReleaseHdc($deviceContext)
+            }
+        }
+        $bitmap.Save((Join-Path $DemoDirectory $Name),
+            [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    finally {
+        $graphics.Dispose()
+        $bitmap.Dispose()
+    }
+}
+
 $source = (Resolve-Path -LiteralPath $ExePath).Path
-$isolated = Join-Path ([System.IO.Path]::GetTempPath()) ('PhoneRegionSmoke-' + [guid]::NewGuid().ToString('N'))
+$demoEnabled = -not [string]::IsNullOrWhiteSpace($DemoDirectory)
+if ($demoEnabled) {
+    $DemoDirectory = [System.IO.Path]::GetFullPath($DemoDirectory)
+    New-Item -ItemType Directory -Path $DemoDirectory -Force | Out-Null
+}
+$scratchRoot = if ($demoEnabled -and $env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$scratchName = if ($demoEnabled) {
+    'PhoneDemo-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+} else {
+    'PhoneRegionSmoke-' + [guid]::NewGuid().ToString('N')
+}
+$isolated = Join-Path $scratchRoot $scratchName
 New-Item -ItemType Directory -Path $isolated | Out-Null
 $copiedExe = Join-Path $isolated 'PhoneRegion.exe'
 Copy-Item -LiteralPath $source -Destination $copiedExe
@@ -222,17 +285,38 @@ try {
         throw 'The phone input, query button or visible result control is missing.'
     }
 
+    if ($demoEnabled) {
+        Save-DemoFrame $window '01-empty.png'
+    }
     Assert-Result $inputControl $queryControl $resultControl '13213000000' @('中国联通', '河南省', '郑州市') @() -Live
+    Save-DemoFrame $window '02-single-result.png'
+    if ($demoEnabled) {
+        foreach ($stage in @(
+            @('03-prefix.png', '+86'),
+            @('04-area.png', '+86 132'),
+            @('05-group.png', '+86 132 1300')
+        )) {
+            [void][NativeWindow]::SendTextMessageW($inputControl, 0x000C,
+                [IntPtr]::Zero, $stage[1])
+            Save-DemoFrame $window $stage[0]
+        }
+    }
     Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
+    Save-DemoFrame $window '06-formatted-result.png'
     Assert-Result $inputControl $queryControl $resultControl '123' @('请输入 11 位') @('中国联通', '河南省', '郑州市')
+    if ($demoEnabled) {
+        Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
+        Save-DemoFrame $window '07-before-import.png'
+    }
 
     $inputCsv = Join-Path $isolated 'phones.csv'
     $outputCsv = Join-Path $isolated 'result.csv'
-    [System.IO.File]::WriteAllText(
-        $inputCsv,
-        "手机号`r`n13213000000`r`n+86 132 1300 0000`r`n123`r`n",
-        [System.Text.UTF8Encoding]::new($true)
-    )
+    $csvContent = "手机号`r`n13213000000`r`n+86 132 1300 0000`r`n123`r`n"
+    if ($demoEnabled) {
+        $csvContent += "13900200000`r`n18901600000`r`n"
+    }
+    [System.IO.File]::WriteAllText($inputCsv, $csvContent,
+        [System.Text.UTF8Encoding]::new($true))
     $importControl = [NativeWindow]::GetDlgItem($window, 1003)
     $progressControl = [NativeWindow]::GetDlgItem($window, 1005)
     if ($importControl -eq [IntPtr]::Zero -or $progressControl -eq [IntPtr]::Zero) {
@@ -242,9 +326,11 @@ try {
         throw 'Could not open the batch file picker.'
     }
     $openDialog = Wait-Dialog '选择手机号文件' $application.Id
-    Complete-FileDialog $openDialog $inputCsv
+    $openFrame = if ($demoEnabled) { '08-open-dialog.png' } else { '' }
+    Complete-FileDialog $openDialog $inputCsv $openFrame
     $saveDialog = Wait-Dialog '保存查询结果' $application.Id
-    Complete-FileDialog $saveDialog $outputCsv
+    $saveFrame = if ($demoEnabled) { '09-save-dialog.png' } else { '' }
+    Complete-FileDialog $saveDialog $outputCsv $saveFrame
 
     for ($attempt = 0; $attempt -lt 200 -and -not (Test-Path -LiteralPath $outputCsv); $attempt++) {
         $application.Refresh()
@@ -257,8 +343,9 @@ try {
         throw "The output CSV did not appear within 20 seconds. Progress: $(Read-WindowText $progressControl)"
     }
     $records = @(Import-Csv -LiteralPath $outputCsv -Encoding utf8)
-    if ($records.Count -ne 3) {
-        throw "Expected three output rows, found $($records.Count)."
+    $expectedRows = if ($demoEnabled) { 5 } else { 3 }
+    if ($records.Count -ne $expectedRows) {
+        throw "Expected $expectedRows output rows, found $($records.Count)."
     }
     $columns = @($records[0].PSObject.Properties.Name)
     if (($columns -join '|') -ne '手机号|运营商|归属地省份|归属地地级市') {
@@ -273,8 +360,31 @@ try {
     if ($records[2].运营商 -ne '' -or $records[2].归属地省份 -ne '' -or $records[2].归属地地级市 -ne '') {
         throw 'The invalid number received invented location or carrier data.'
     }
+    if ($demoEnabled) {
+        $mobile = $records[3]
+        $telecom = $records[4]
+        if ($mobile.手机号 -ne '13900200000' -or $mobile.运营商 -ne '中国移动' -or
+            $mobile.归属地省份 -ne '广东省' -or $mobile.归属地地级市 -ne '广州市') {
+            throw 'The demo CSV mobile carrier row is incorrect.'
+        }
+        if ($telecom.手机号 -ne '18901600000' -or $telecom.运营商 -ne '中国电信' -or
+            $telecom.归属地省份 -ne '上海市' -or $telecom.归属地地级市 -ne '上海市') {
+            throw 'The demo CSV telecom carrier row is incorrect.'
+        }
+    }
     if (-not (Test-Path -LiteralPath $inputCsv)) {
         throw 'The original input CSV disappeared.'
+    }
+    if ($demoEnabled) {
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            if ((Read-WindowText $progressControl).Contains('已保存')) { break }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not (Read-WindowText $progressControl).Contains('已保存')) {
+            throw 'The batch completion status did not appear for the demo.'
+        }
+        Save-DemoFrame $window '10-batch-complete.png'
+        Copy-Item -LiteralPath $outputCsv -Destination (Join-Path $DemoDirectory 'result.csv')
     }
     Write-Host 'Windows GUI smoke test passed, including a standalone EXE launch.'
 }

@@ -1,0 +1,27 @@
+name: Record the Windows demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Capture real queries and a CSV export
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:WINDIR/Fonts" -Include msyh*,simsun*,deng* -Recurse | Select-Object -ExpandProperty Name
+          ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phone-region-demo-frames
+          path: target/demo-frames/
+          retention-days: 3
+          if-no-files-found: error
