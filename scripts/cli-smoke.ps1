@@ -82,3 +82,4 @@ finally {
 }
 
 Write-Host "CLI smoke passed: $exe"
+exit 0
