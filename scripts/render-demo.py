@@ -1,93 +1,176 @@
-"""Render the README animation from real Windows captures and their exported CSV."""
+"""Create a bilingual landscape GIF from verified Windows captures."""
+
 import argparse
 import csv
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 
-WIDTH, HEIGHT = 732, 618
-INK, MUTED, ACCENT = '#172d31', '#435d60', '#087360'
-BORDER, PAPER = '#c7d7d6', '#eef4f3'
-SOURCE = (4, 1, 631, 506)
+
+WIDTH, HEIGHT = 1140, 620
+SHOT_BOX = (24, 24, 802, 596)
+PANEL_LEFT = 836
 SCENES = [
-    ('01-empty.png', 700, '输入一个手机号', 'Enter a mobile number', 0),
-    ('03-prefix.png', 450, '输入一个手机号', 'Enter a mobile number', 0),
-    ('04-area.png', 450, '输入一个手机号', 'Enter a mobile number', 0),
-    ('05-group.png', 500, '输入一个手机号', 'Enter a mobile number', 0),
-    ('06-formatted-result.png', 2900, '查看原号段运营商、省份和地市', 'See the original carrier, province and city', 0),
-    ('07-before-import.png', 1550, '导入号码表', 'Import a list from Excel or CSV', 1),
-    ('08-open-dialog.png', 1450, '选择首列是手机号的文件', 'Choose a file with numbers in the first column', 1),
-    ('09-save-dialog.png', 1450, '另存查询结果', 'Choose where to save the results', 1),
-    ('10-batch-complete.png', 2200, '查看处理结果', 'Check the totals after export', 2),
-    ('result.csv', 4300, '打开四列结果表', 'Open the exported file', 2),
+    ("01-empty.png", 700, "输入手机号", "Enter a mobile number"),
+    ("02-single-result.png", 1400, "查看单号结果", "See the result instantly"),
+    ("03-prefix.png", 380, "支持中国区号", "Use the +86 country code"),
+    ("04-area.png", 380, "号码可以分组", "Spaces are accepted"),
+    ("05-group.png", 420, "继续输入号码", "Keep entering the number"),
+    ("06-formatted-result.png", 2100, "直接显示归属地", "See carrier, province and city"),
+    ("07-before-import.png", 1000, "批量导入", "Import Excel or CSV"),
+    ("08-open-dialog.png", 1150, "选择号码文件", "Choose the input file"),
+    ("09-save-dialog.png", 1150, "选择结果位置", "Choose where to save"),
+    ("10-batch-complete.png", 1600, "导出完成", "See the processed row count"),
+    ("result.csv", 3100, "四列查询结果", "Open the exported results"),
 ]
 
 
 def font(size, bold=False):
-    if os.name == 'nt':
-        path = Path(os.environ['WINDIR']) / 'Fonts' / ('msyhbd.ttc' if bold else 'msyh.ttc')
+    if os.name == "nt":
+        directory = Path(os.environ["WINDIR"]) / "Fonts"
+        names = ("msyhbd.ttc", "msyh.ttc", "simhei.ttf", "simsun.ttc") if bold else (
+            "msyh.ttc", "msyhbd.ttc", "simsun.ttc"
+        )
     else:
-        path = Path('/System/Library/Fonts/Hiragino Sans GB.ttc')
-    return ImageFont.truetype(str(path), size)
+        directory = Path("/System/Library/Fonts")
+        names = ("Hiragino Sans GB.ttc",)
+    for name in names:
+        path = directory / name
+        if path.exists():
+            return ImageFont.truetype(str(path), size)
+    raise FileNotFoundError("A Chinese font is needed to render the bilingual demo")
 
 
-def table(draw, csv_path):
-    with csv_path.open(encoding='utf-8-sig', newline='') as source:
-        header, *rows = csv.reader(source)
-    left, right = 42, WIDTH - 42
-    draw.rounded_rectangle((left, 135, right, 535), radius=10, fill='white', outline=BORDER)
-    draw.text((left + 22, 162), csv_path.name, font=font(25, True), fill=INK, anchor='lm')
-    draw.rectangle((left + 1, 202, right - 1, 244), fill='#e3f0eb')
-    positions = [64, 245, 403, 544]
-    for idx, field in enumerate(header):
-        draw.text((positions[idx], 223), field, font=font(17, True), fill=ACCENT, anchor='lm')
-    for idx, row in enumerate(rows):
-        y = 266 + 45 * idx
-        for x, value in zip(positions, row):
-            draw.text((x, y), value, font=font(18), fill=INK, anchor='lm')
-        draw.line((left + 17, y + 23, right - 17, y + 23), fill='#e4ecea')
-    draw.text((left + 22, 489), '格式错误的号码会保留，查询字段留空。', font=font(15), fill=MUTED, anchor='lm')
-    draw.text((left + 22, 513), 'Invalid inputs stay in the file with empty lookup fields.', font=font(14), fill=MUTED, anchor='lm')
+def theme_colours(theme):
+    if theme == "dark":
+        return {
+            "canvas": "#151a1d", "panel": "#22292d", "ink": "#f3f6f5",
+            "muted": "#b8c9c6", "accent": "#73d5bf", "line": "#415055",
+            "table": "#20282c", "table_head": "#30443f",
+        }
+    return {
+        "canvas": "#edf3f2", "panel": "#ffffff", "ink": "#172d31",
+        "muted": "#435d60", "accent": "#087360", "line": "#c7d7d6",
+        "table": "#ffffff", "table_head": "#e3f0eb",
+    }
 
 
-def render(frames, output):
-    images, durations = [], []
-    for name, duration, title, caption, chapter in SCENES:
-        image = Image.new('RGB', (WIDTH, HEIGHT), PAPER)
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((0, 0, WIDTH, 85), fill='white')
-        draw.text((31, 29), title, font=font(25, True), fill=INK, anchor='lm')
-        draw.text((32, 61), caption, font=font(17), fill=MUTED, anchor='lm')
-        for idx in range(3):
-            start = idx * WIDTH // 3
-            draw.rectangle((start + (2 if idx else 0), 84, (idx + 1) * WIDTH // 3 - 1, 86),
-                           fill=ACCENT if idx <= chapter else BORDER)
-        if name.endswith('.csv'):
-            table(draw, frames / name)
-        else:
-            with Image.open(frames / name) as opened:
-                shot = opened.convert('RGB')
-            if shot.size == (635, 510):
-                shot = shot.crop(SOURCE)  # Remove the desktop just outside the app border.
-            shot.thumbnail((WIDTH - 40, HEIGHT - 106), Image.Resampling.LANCZOS)
-            x, y = (WIDTH - shot.width) // 2, 88 + (HEIGHT - 88 - shot.height) // 2
-            draw.rectangle((x - 1, y - 1, x + shot.width, y + shot.height), outline=BORDER)
-            image.paste(shot, (x, y))
-            if name == '07-before-import.png':
-                draw.rounded_rectangle((x + 20, y + 298, x + 236, y + 344),
-                                       radius=5, outline=ACCENT, width=3)
-        images.append(image.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
-                                     dither=Image.Dither.NONE))
-        durations.append(duration)
+def check_captures(frames):
+    for name, _, _, _ in SCENES:
+        if name.endswith(".csv"):
+            continue
+        with Image.open(frames / name) as opened:
+            shot = opened.convert("RGB")
+        if min(shot.size) < 350 or max(ImageStat.Stat(shot).stddev) < 8:
+            raise ValueError(f"Unusable Windows capture: {frames / name}")
+
+
+def check_theme_difference(light, dark):
+    with Image.open(light / "01-empty.png") as opened:
+        light_shot = opened.convert("L")
+    with Image.open(dark / "01-empty.png") as opened:
+        dark_shot = opened.convert("L")
+    if light_shot.size != dark_shot.size:
+        raise ValueError("Light and dark captures have different window dimensions")
+    width, height = light_shot.size
+    box = (width // 10, height // 6, width * 9 // 10, height * 9 // 10)
+    light_mean = ImageStat.Stat(light_shot.crop(box)).mean[0]
+    dark_mean = ImageStat.Stat(dark_shot.crop(box)).mean[0]
+    if light_mean - dark_mean < 45:
+        raise ValueError(
+            f"Application themes look too similar ({light_mean:.1f} versus {dark_mean:.1f})"
+        )
+
+
+def read_result(path):
+    with path.open(encoding="utf-8-sig", newline="") as source:
+        rows = list(csv.reader(source))
+    if not rows or rows[0] != ["手机号", "运营商", "归属地省份", "归属地地级市"]:
+        raise ValueError(f"Unexpected result columns in {path}")
+    if len(rows) != 6 or any(len(row) != 4 for row in rows):
+        raise ValueError(f"Expected five complete demo result rows in {path}")
+    return rows
+
+
+def draw_table(draw, rows, colours):
+    x0, y0, x1, y1 = SHOT_BOX
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=13,
+                           fill=colours["table"], outline=colours["line"], width=2)
+    draw.text((x0 + 24, y0 + 38), "result.csv", font=font(26, True),
+              fill=colours["ink"], anchor="lm")
+    draw.rectangle((x0 + 2, y0 + 78, x1 - 2, y0 + 130), fill=colours["table_head"])
+    column_x = (x0 + 20, x0 + 195, x0 + 352, x0 + 506)
+    for x, value in zip(column_x, rows[0]):
+        draw.text((x, y0 + 104), value, font=font(17, True),
+                  fill=colours["accent"], anchor="lm")
+    for index, row in enumerate(rows[1:]):
+        y = y0 + 163 + index * 70
+        for x, value in zip(column_x, row):
+            draw.text((x, y), value, font=font(18), fill=colours["ink"], anchor="lm")
+        draw.line((x0 + 18, y + 30, x1 - 18, y + 30), fill=colours["line"], width=1)
+    draw.text((x0 + 20, y1 - 28), "格式错误的号码保留原值，查询字段留空",
+              font=font(15), fill=colours["muted"], anchor="lm")
+
+
+def render_scene(frames, scene, theme):
+    name, duration, title, english = scene
+    colours = theme_colours(theme)
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), colours["canvas"])
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((PANEL_LEFT, 24, WIDTH - 24, HEIGHT - 24), radius=14,
+                           fill=colours["panel"], outline=colours["line"], width=1)
+    draw.text((PANEL_LEFT + 26, 78), "手机号归属地", font=font(23, True),
+              fill=colours["ink"], anchor="lm")
+    draw.text((PANEL_LEFT + 26, 114), "Offline phone lookup", font=font(16),
+              fill=colours["muted"], anchor="lm")
+    draw.line((PANEL_LEFT + 26, 150, WIDTH - 50, 150), fill=colours["line"], width=2)
+    draw.text((PANEL_LEFT + 26, 223), title, font=font(26, True),
+              fill=colours["ink"], anchor="lm")
+    draw.text((PANEL_LEFT + 26, 260), english, font=font(16),
+              fill=colours["muted"], anchor="lm")
+    mode = "深色模式  Dark" if theme == "dark" else "浅色模式  Light"
+    draw.text((PANEL_LEFT + 26, HEIGHT - 67), mode, font=font(16),
+              fill=colours["accent"], anchor="lm")
+
+    if name.endswith(".csv"):
+        draw_table(draw, read_result(frames / name), colours)
+    else:
+        with Image.open(frames / name) as opened:
+            shot = opened.convert("RGB")
+        x0, y0, x1, y1 = SHOT_BOX
+        shot = ImageOps.contain(shot, (x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        canvas.paste(shot, (x0 + (x1 - x0 - shot.width) // 2,
+                            y0 + (y1 - y0 - shot.height) // 2))
+    return canvas.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
+                           dither=Image.Dither.NONE), duration
+
+
+def render(light_frames, output, dark_frames=None):
+    check_captures(light_frames)
+    if dark_frames:
+        check_captures(dark_frames)
+        check_theme_difference(light_frames, dark_frames)
+        if read_result(light_frames / "result.csv") != read_result(dark_frames / "result.csv"):
+            raise ValueError("Light and dark runs exported different CSV results")
+    images = []
+    durations = []
+    for theme, frames in (("light", light_frames), ("dark", dark_frames)):
+        if frames is None:
+            continue
+        for scene in SCENES:
+            image, duration = render_scene(frames, scene, theme)
+            images.append(image)
+            durations.append(duration)
     output.parent.mkdir(exist_ok=True, parents=True)
-    images[0].save(output, save_all=True, append_images=images[1:], duration=durations,
-                   loop=0, disposal=1, optimize=True)
+    images[0].save(output, save_all=True, append_images=images[1:],
+                   duration=durations, loop=0, disposal=2, optimize=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('frames', type=Path)
-    parser.add_argument('output', type=Path)
+    parser.add_argument("frames", type=Path, help="directory with the light captures")
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--dark-frames", type=Path)
     args = parser.parse_args()
-    render(args.frames, args.output)
+    render(args.frames, args.output, args.dark_frames)

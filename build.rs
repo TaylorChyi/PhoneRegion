@@ -1,6 +1,7 @@
 fn main() {
     for path in [
         "windows/app.rc",
+        "windows/phone-region.ico",
         "windows/app.manifest",
         "windows/third-party-notices.zip",
     ] {

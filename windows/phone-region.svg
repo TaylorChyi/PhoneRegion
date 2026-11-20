@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="256" height="256" viewBox="0 0 64 64">
+  <title>PhoneRegion</title>
+  <desc>A yellow location pin with a telephone keypad on an aqua tile.</desc>
+  <defs>
+    <linearGradient id="tile" x2=".8" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#057382"/>
+      <stop offset=".55" stop-color="#057382"/>
+      <stop offset="1" stop-color="#035f6e"/>
+    </linearGradient>
+    <linearGradient id="edge" x2=".72" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#43a2aa"/>
+      <stop offset="1" stop-color="#035f6e"/>
+    </linearGradient>
+    <linearGradient id="pin" x2=".24" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#f8ff19"/>
+      <stop offset=".58" stop-color="#f8ff19"/>
+      <stop offset="1" stop-color="#ebf304"/>
+    </linearGradient>
+    <path id="dial" fill="url(#pin)" fill-rule="evenodd" d="
+    M32 12c9.1 0 16 6.5 16 15.3 0 9.6-9.5 18.7-14.8 23.6a1.8 1.8 0 0 1-2.4 0C25.5 46 16 36.9 16 27.3 16 18.5 22.9 12 32 12Z
+    M25.7 20.06a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M32 20.06a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M38.3 20.06a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M25.7 25.66a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M32 25.66a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M38.3 25.66a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M25.7 31.26a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M32 31.26a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M38.3 31.26a1.64 1.64 0 1 0 0 3.28 1.64 1.64 0 0 0 0 -3.28Z
+    M30.7 37h2.6a1.4 1.4 0 0 1 0 2.8h-2.6a1.4 1.4 0 0 1 0-2.8Z"/>
+    <!-- The 16, 20 and 24 px Windows frames use a single opening. -->
+    <path id="compact" fill="url(#pin)" fill-rule="evenodd" d="M32 12c9.1 0 16 6.5 16 15.3 0 9.6-9.5 18.7-14.8 23.6a1.8 1.8 0 0 1-2.4 0C25.5 46 16 36.9 16 27.3 16 18.5 22.9 12 32 12Z M32 20a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z"/>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#tile)" stroke="url(#edge)" stroke-width="1"/>
+  <use xlink:href="#dial"/>
+</svg>

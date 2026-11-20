@@ -304,6 +304,24 @@ try {
     Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
     Save-DemoFrame $window '06-formatted-result.png'
     Assert-Result $inputControl $queryControl $resultControl '123' @('请输入 11 位') @('中国联通', '河南省', '郑州市')
+    [void][NativeWindow]::SendTextMessageW($inputControl, 0x000C, [IntPtr]::Zero, '')
+    if ((Read-WindowText $resultControl) -ne '') {
+        throw 'Clearing the input did not clear the old result.'
+    }
+    if (-not [NativeWindow]::PostMessageW($inputControl, 0x0100, [IntPtr]13, [IntPtr]::Zero)) {
+        throw 'Could not send Enter to the phone input.'
+    }
+    $enterWorked = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if ((Read-WindowText $resultControl).Contains('请输入手机号')) {
+            $enterWorked = $true
+            break
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not $enterWorked) {
+        throw 'Pressing Enter in the phone input did not trigger a query.'
+    }
     if ($demoEnabled) {
         Assert-Result $inputControl $queryControl $resultControl '+86 132 1300 0000' @('中国联通', '河南省', '郑州市') @()
         Save-DemoFrame $window '07-before-import.png'

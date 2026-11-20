@@ -14,11 +14,37 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Capture real queries and a CSV export
+      - name: Capture both application themes and real CSV exports
         shell: pwsh
         run: |
-          Get-ChildItem "$env:WINDIR/Fonts" -Include msyh*,simsun*,deng* -Recurse | Select-Object -ExpandProperty Name
-          ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames
+          $themeKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+          $hadThemeKey = Test-Path -LiteralPath $themeKey
+          $originalTheme = if ($hadThemeKey) {
+            (Get-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue).AppsUseLightTheme
+          }
+          try {
+            New-Item -Path $themeKey -Force | Out-Null
+            Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value 1
+            ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames/light
+            Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value 0
+            ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames/dark
+          }
+          finally {
+            if ($null -ne $originalTheme) {
+              Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value $originalTheme
+            }
+            else {
+              Remove-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue
+            }
+            if (-not $hadThemeKey) {
+              Remove-Item -LiteralPath $themeKey -Force -ErrorAction SilentlyContinue
+            }
+          }
+      - name: Check captures and render bilingual animation
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check Pillow
+          python ./scripts/render-demo.py ./target/demo-frames/light ./target/demo-frames/demo.gif --dark-frames ./target/demo-frames/dark
       - uses: actions/upload-artifact@v4
         with:
           name: phone-region-demo-frames
