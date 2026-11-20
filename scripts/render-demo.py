@@ -5,12 +5,10 @@ import csv
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageFont, ImageStat
 
 
-WIDTH, HEIGHT = 1200, 660
-SHOT_BOX = (18, 18, 868, 642)
-PANEL_LEFT = 902
+CAPTION_HEIGHT = 76
 SCENES = [
     ("01-empty.png", 700, "输入手机号", "Enter a mobile number"),
     ("02-single-result.png", 1400, "查看单号结果", "See the result instantly"),
@@ -46,11 +44,11 @@ def theme_colours(theme):
     if theme == "dark":
         return {
             "canvas": "#1e1e1e", "ink": "#f3f3f3", "muted": "#c4c4c4",
-            "line": "#555555", "table": "#242424", "table_head": "#303030",
+            "line": "#555555", "table_head": "#303030",
         }
     return {
         "canvas": "#fafafa", "ink": "#202020", "muted": "#555555",
-        "line": "#d3d3d3", "table": "#ffffff", "table_head": "#f0f0f0",
+        "line": "#d3d3d3", "table_head": "#f0f0f0",
     }
 
 
@@ -101,58 +99,72 @@ def read_result(path):
     return rows
 
 
-def draw_table(draw, rows, colours):
-    x0, y0, x1, y1 = SHOT_BOX
-    draw.rounded_rectangle((x0, y0, x1, y1), radius=13,
-                           fill=colours["table"], outline=colours["line"], width=2)
-    draw.text((x0 + 24, y0 + 38), "result.csv", font=font(26, True),
+def convert_native_hero(frames):
+    bitmap = frames / "window-2x.bmp"
+    if not bitmap.exists():
+        return
+    with Image.open(bitmap) as opened:
+        hero = opened.convert("RGB")
+        if min(hero.size) < 1000 or max(ImageStat.Stat(hero).stddev) < 8:
+            raise ValueError(f"Unusable native 192 DPI capture: {bitmap}")
+        hero.save(frames / "hero.png", format="PNG")
+
+
+def draw_table(draw, rows, colours, width, height):
+    margin = max(16, width // 40)
+    draw.text((margin, 44), "result.csv", font=font(27, True),
               fill=colours["ink"], anchor="lm")
-    draw.rectangle((x0 + 2, y0 + 78, x1 - 2, y0 + 130), fill=colours["table_head"])
-    column_x = (x0 + 20, x0 + 195, x0 + 352, x0 + 506)
-    for x, value in zip(column_x, rows[0]):
-        draw.text((x, y0 + 104), value, font=font(17, True),
+    draw.rectangle((0, 80, width, 132), fill=colours["table_head"])
+    columns = (margin, width * 25 // 100, width * 49 // 100, width * 73 // 100)
+    table_font = 23 if width >= 840 else 18
+    for x, value in zip(columns, rows[0]):
+        draw.text((x, 106), value, font=font(table_font, True),
                   fill=colours["ink"], anchor="lm")
+    row_step = min(73, max(55, (height - 183) // 6))
     for index, row in enumerate(rows[1:]):
-        y = y0 + 163 + index * 70
-        for x, value in zip(column_x, row):
-            draw.text((x, y), value, font=font(18), fill=colours["ink"], anchor="lm")
-        draw.line((x0 + 18, y + 30, x1 - 18, y + 30), fill=colours["line"], width=1)
-    draw.text((x0 + 20, y1 - 28), "格式错误的号码保留原值，查询字段留空",
+        y = 165 + index * row_step
+        for x, value in zip(columns, row):
+            draw.text((x, y), value, font=font(table_font), fill=colours["ink"], anchor="lm")
+        draw.line((margin, y + 28, width - margin, y + 28), fill=colours["line"], width=1)
+    draw.text((margin, height - 27), "格式错误的号码保留原值，查询字段留空",
               font=font(15), fill=colours["muted"], anchor="lm")
 
 
-def render_scene(frames, scene, theme):
+def render_scene(frames, scene, theme, window_size):
     name, duration, title, english = scene
     colours = theme_colours(theme)
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), colours["canvas"])
+    width, window_height = window_size
+    canvas = Image.new("RGB", (width, window_height + CAPTION_HEIGHT), colours["canvas"])
     draw = ImageDraw.Draw(canvas)
-    draw.line((PANEL_LEFT - 18, 24, PANEL_LEFT - 18, HEIGHT - 24),
-              fill=colours["line"], width=2)
-    draw.text((PANEL_LEFT, 195), title, font=font(27, True),
-              fill=colours["ink"], anchor="lm")
-    draw.text((PANEL_LEFT, 240), english, font=font(17),
-              fill=colours["muted"], anchor="lm")
-    mode = "深色模式  Dark" if theme == "dark" else "浅色模式  Light"
-    draw.text((PANEL_LEFT, HEIGHT - 49), mode, font=font(16),
-              fill=colours["muted"], anchor="lm")
 
     if name.endswith(".csv"):
-        draw_table(draw, read_result(frames / name), colours)
+        draw_table(draw, read_result(frames / name), colours, width, window_height)
     else:
         with Image.open(frames / name) as opened:
             shot = opened.convert("RGB")
-        x0, y0, x1, y1 = SHOT_BOX
-        shot.thumbnail((x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
-        canvas.paste(shot, (x0 + (x1 - x0 - shot.width) // 2,
-                            y0 + (y1 - y0 - shot.height) // 2))
+        shot.thumbnail(window_size, Image.Resampling.LANCZOS)
+        canvas.paste(shot, ((width - shot.width) // 2,
+                            (window_height - shot.height) // 2))
+    draw.line((0, window_height, width, window_height), fill=colours["line"], width=1)
+    draw.text((18, window_height + 23), title, font=font(23, True),
+              fill=colours["ink"], anchor="lm")
+    draw.text((18, window_height + 51), english, font=font(15),
+              fill=colours["muted"], anchor="lm")
+    mode = "Dark" if theme == "dark" else "Light"
+    draw.text((width - 18, window_height + 23), mode, font=font(14),
+              fill=colours["muted"], anchor="rm")
     return canvas.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
                            dither=Image.Dither.NONE), duration
 
 
 def render(light_frames, output, dark_frames=None):
     check_captures(light_frames)
+    convert_native_hero(light_frames)
+    with Image.open(light_frames / "01-empty.png") as opened:
+        window_size = opened.size
     if dark_frames:
         check_captures(dark_frames)
+        convert_native_hero(dark_frames)
         check_theme_difference(light_frames, dark_frames)
         if read_result(light_frames / "result.csv") != read_result(dark_frames / "result.csv"):
             raise ValueError("Light and dark runs exported different CSV results")
@@ -162,7 +174,7 @@ def render(light_frames, output, dark_frames=None):
         if frames is None:
             continue
         for scene in SCENES:
-            image, duration = render_scene(frames, scene, theme)
+            image, duration = render_scene(frames, scene, theme, window_size)
             images.append(image)
             durations.append(duration)
     output.parent.mkdir(exist_ok=True, parents=True)

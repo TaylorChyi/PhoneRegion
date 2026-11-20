@@ -9,7 +9,7 @@ permissions:
 jobs:
   record:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -26,10 +26,18 @@ jobs:
             New-Item -Path $themeKey -Force | Out-Null
             Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value 1
             ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames/light
+            $env:PHONE_REGION_DPI_CAPTURE = Join-Path (Resolve-Path ./target/demo-frames/light) 'window-2x.bmp'
+            cargo test --locked ui::dpi_tests::native_window_rescales_after_monitor_change -- --exact
+            if ($LASTEXITCODE -ne 0) { throw 'The native 192 DPI redraw test failed in light mode.' }
+            Remove-Item Env:PHONE_REGION_DPI_CAPTURE
             Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value 0
             ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork -DemoDirectory ./target/demo-frames/dark
+            $env:PHONE_REGION_DPI_CAPTURE = Join-Path (Resolve-Path ./target/demo-frames/dark) 'window-2x.bmp'
+            cargo test --locked ui::dpi_tests::native_window_rescales_after_monitor_change -- --exact
+            if ($LASTEXITCODE -ne 0) { throw 'The native 192 DPI redraw test failed in dark mode.' }
           }
           finally {
+            Remove-Item Env:PHONE_REGION_DPI_CAPTURE -ErrorAction SilentlyContinue
             if ($null -ne $originalTheme) {
               Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value $originalTheme
             }

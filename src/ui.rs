@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, mpsc};
 
+#[cfg(test)]
+mod dpi_tests;
+#[path = "ui/drawing.rs"]
+mod drawing;
+use drawing::Canvas;
+
 type Handle = *mut c_void;
 type Hwnd = Handle;
 type Wparam = usize;
@@ -15,6 +21,15 @@ type Lparam = isize;
 type Lresult = isize;
 
 const WS_CAPTION: u32 = 0x00C00000;
+const WS_THICKFRAME: u32 = 0x00040000;
+const WS_MAXIMIZEBOX: u32 = 0x00010000;
+const WS_VSCROLL: u32 = 0x00200000;
+const SB_LINEUP: usize = 0;
+const SB_LINEDOWN: usize = 1;
+const SB_PAGEUP: usize = 2;
+const SB_PAGEDOWN: usize = 3;
+const SB_THUMBTRACK: usize = 5;
+const SWP_NOOWNERZORDER: u32 = 0x0200;
 const WS_SYSMENU: u32 = 0x00080000;
 const WS_MINIMIZEBOX: u32 = 0x00020000;
 const WS_VISIBLE: u32 = 0x10000000;
@@ -23,7 +38,7 @@ const WS_TABSTOP: u32 = 0x00010000;
 const ES_AUTOHSCROLL: u32 = 0x0080;
 const BS_OWNERDRAW: u32 = 0x000B;
 const SS_LEFT: u32 = 0;
-const SS_CENTER: u32 = 1;
+const SS_OWNERDRAW: u32 = 0x000D;
 const WM_CREATE: u32 = 0x0001;
 const WM_CLOSE: u32 = 0x0010;
 const WM_DESTROY: u32 = 0x0002;
@@ -36,6 +51,11 @@ const WM_ERASEBKGND: u32 = 0x0014;
 const WM_CTLCOLORSTATIC: u32 = 0x0138;
 const WM_CTLCOLOREDIT: u32 = 0x0133;
 const WM_DRAWITEM: u32 = 0x002B;
+const WM_SIZE: u32 = 0x0005;
+const WM_DPICHANGED: u32 = 0x02E0;
+const WM_VSCROLL: u32 = 0x0115;
+const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_GETMINMAXINFO: u32 = 0x0024;
 const WM_SETFONT: u32 = 0x0030;
 const WM_KEYDOWN: u32 = 0x0100;
 const EM_SETCUEBANNER: u32 = 0x1501;
@@ -84,6 +104,15 @@ const ODS_FOCUS: u32 = 0x10;
 const RDW_INVALIDATE: u32 = 1;
 const RDW_ERASE: u32 = 4;
 const RDW_ALLCHILDREN: u32 = 0x80;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const SB_VERT: i32 = 1;
+const SIF_RANGE: u32 = 1;
+const SIF_PAGE: u32 = 2;
+const SIF_POS: u32 = 4;
+const SIF_TRACKPOS: u32 = 16;
+const DT_WORDBREAK: u32 = 0x10;
+const DT_NOPREFIX: u32 = 0x800;
 
 #[repr(C)]
 struct WndClass {
@@ -147,6 +176,26 @@ struct HighContrast {
 }
 
 #[repr(C)]
+struct ScrollInfo {
+    size: u32,
+    mask: u32,
+    min: i32,
+    max: i32,
+    page: u32,
+    pos: i32,
+    track_pos: i32,
+}
+
+#[repr(C)]
+struct MinMaxInfo {
+    reserved: Point,
+    max_size: Point,
+    max_position: Point,
+    min_track_size: Point,
+    max_track_size: Point,
+}
+
+#[repr(C)]
 struct OpenFileName {
     size: u32,
     owner: Hwnd,
@@ -191,6 +240,8 @@ unsafe extern "system" {
         parameter: Handle,
     ) -> Hwnd;
     fn DefWindowProcW(hwnd: Hwnd, msg: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
+    #[cfg(test)]
+    fn DestroyWindow(hwnd: Hwnd) -> i32;
     fn GetMessageW(message: *mut Message, hwnd: Hwnd, min: u32, max: u32) -> i32;
     fn TranslateMessage(message: *const Message) -> i32;
     fn DispatchMessageW(message: *const Message) -> Lresult;
@@ -227,6 +278,32 @@ unsafe extern "system" {
     fn FillRect(dc: Handle, rect: *const Rect, brush: Handle) -> i32;
     fn DrawTextW(dc: Handle, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
     fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+    fn SetWindowPos(
+        hwnd: Hwnd,
+        after: Hwnd,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> i32;
+    fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
+    fn GetDpiForWindow(hwnd: Hwnd) -> u32;
+    fn GetDpiForSystem() -> u32;
+    fn SetScrollInfo(hwnd: Hwnd, bar: i32, info: *const ScrollInfo, redraw: i32) -> i32;
+    fn GetScrollInfo(hwnd: Hwnd, bar: i32, info: *mut ScrollInfo) -> i32;
+    fn ShowScrollBar(hwnd: Hwnd, bar: i32, show: i32) -> i32;
+    fn DrawIconEx(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        icon: Handle,
+        width: i32,
+        height: i32,
+        frame: u32,
+        background: Handle,
+        flags: u32,
+    ) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -254,20 +331,6 @@ unsafe extern "system" {
     ) -> Handle;
     fn DeleteObject(object: Handle) -> i32;
     fn CreateSolidBrush(color: u32) -> Handle;
-    fn CreatePen(style: i32, width: i32, color: u32) -> Handle;
-    fn RoundRect(
-        dc: Handle,
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        ellipse_width: i32,
-        ellipse_height: i32,
-    ) -> i32;
-    fn Ellipse(dc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
-    fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
-    fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
-    fn GetStockObject(index: i32) -> Handle;
     fn SetTextColor(dc: Handle, color: u32) -> u32;
     fn SetBkColor(dc: Handle, color: u32) -> u32;
     fn SetBkMode(dc: Handle, mode: i32) -> i32;
@@ -300,7 +363,12 @@ unsafe extern "system" {
 
 struct UiState {
     database: Arc<Database>,
+    brand: Hwnd,
+    offline: Hwnd,
+    title: Hwnd,
+    subtitle: Hwnd,
     input: Hwnd,
+    query: Hwnd,
     result: Hwnd,
     result_label: Hwnd,
     caveat: Hwnd,
@@ -309,10 +377,68 @@ struct UiState {
     font: Handle,
     title_font: Handle,
     input_font: Handle,
-    compact: bool,
+    small_font: Handle,
+    dpi: u32,
+    scroll: i32,
+    layout: Layout,
+    icon: Handle,
+    result_view: Option<ResultView>,
+    result_error: bool,
+    scroll_visible: bool,
     theme: Theme,
     busy: bool,
     receiver: Option<mpsc::Receiver<Result<(PathBuf, batch::Summary), String>>>,
+}
+
+#[derive(Clone)]
+struct ResultView {
+    carrier: String,
+    province: String,
+    city: String,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Layout {
+    margin: f32,
+    width: f32,
+    result_y: f32,
+    result_height: f32,
+    batch_y: f32,
+    status_y: f32,
+    content_height: f32,
+    columns: bool,
+}
+
+impl Layout {
+    fn new(window_width: f32, result: bool, error: bool) -> Self {
+        let margin = if window_width < 680.0 { 24.0 } else { 48.0 };
+        let width = (window_width - 2.0 * margin).clamp(1.0, 1080.0);
+        let columns = width >= 720.0;
+        let result_y = 296.0;
+        let result_height = if result {
+            if columns { 112.0 } else { 216.0 }
+        } else if error {
+            56.0
+        } else {
+            0.0
+        };
+        let batch_y = if result_height > 0.0 {
+            result_y + result_height + 43.0
+        } else {
+            338.0
+        };
+        let status_y = batch_y + 91.0;
+        Self {
+            margin,
+            width,
+            result_y,
+            result_height,
+            batch_y,
+            status_y,
+            content_height: status_y + 80.0,
+            columns,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -323,7 +449,6 @@ struct Colors {
     button: u32,
     border: u32,
     disabled: u32,
-    button_text: u32,
     muted: u32,
     accent: u32,
     accent_text: u32,
@@ -334,11 +459,7 @@ struct Theme {
     high_contrast: bool,
     surface_brush: Handle,
     field_brush: Handle,
-    button_brush: Handle,
     border_brush: Handle,
-    accent_brush: Handle,
-    border_pen: Handle,
-    accent_pen: Handle,
 }
 
 impl Theme {
@@ -380,7 +501,6 @@ impl Theme {
                     button: GetSysColor(COLOR_BTNFACE),
                     border: GetSysColor(COLOR_BTNTEXT),
                     disabled: GetSysColor(COLOR_GRAYTEXT),
-                    button_text: GetSysColor(COLOR_BTNTEXT),
                     muted: GetSysColor(COLOR_WINDOWTEXT),
                     accent: GetSysColor(COLOR_HIGHLIGHT),
                     accent_text: GetSysColor(COLOR_HIGHLIGHTTEXT),
@@ -399,11 +519,7 @@ impl Theme {
                 high_contrast,
                 surface_brush: CreateSolidBrush(colors.surface),
                 field_brush: CreateSolidBrush(colors.field),
-                button_brush: CreateSolidBrush(colors.button),
                 border_brush: CreateSolidBrush(colors.border),
-                accent_brush: CreateSolidBrush(colors.accent),
-                border_pen: CreatePen(0, 1, colors.border),
-                accent_pen: CreatePen(0, 1, colors.accent),
             }
         }
     }
@@ -412,11 +528,7 @@ impl Theme {
         unsafe {
             DeleteObject(self.surface_brush);
             DeleteObject(self.field_brush);
-            DeleteObject(self.button_brush);
             DeleteObject(self.border_brush);
-            DeleteObject(self.accent_brush);
-            DeleteObject(self.border_pen);
-            DeleteObject(self.accent_pen);
         }
     }
 }
@@ -430,7 +542,6 @@ fn colors_for_mode(dark: bool) -> Colors {
             button: 0x001E1E1E,
             border: 0x00545454,
             disabled: 0x00AAAAAA,
-            button_text: 0x00F3F3F3,
             muted: 0x00B9B9B9,
             accent: 0x00F3F3F3,
             accent_text: 0x001E1E1E,
@@ -443,7 +554,6 @@ fn colors_for_mode(dark: bool) -> Colors {
             button: 0x00FFFFFF,
             border: 0x00D1D1D1,
             disabled: 0x006A6A6A,
-            button_text: 0x001E1E1E,
             muted: 0x006A6A6A,
             accent: 0x001E1E1E,
             accent_text: 0x00FFFFFF,
@@ -453,6 +563,210 @@ fn colors_for_mode(dark: bool) -> Colors {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn pixels(dip: f32, dpi: u32) -> i32 {
+    (dip * dpi as f32 / 96.0).round() as i32
+}
+
+fn rgb(colorref: u32) -> u32 {
+    ((colorref & 0x0000ff) << 16) | (colorref & 0x00ff00) | ((colorref & 0xff0000) >> 16)
+}
+
+unsafe fn make_font(size: f32, weight: i32, dpi: u32) -> Handle {
+    unsafe {
+        CreateFontW(
+            -pixels(size, dpi),
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            5,
+            0,
+            wide("Microsoft YaHei UI").as_ptr(),
+        )
+    }
+}
+
+unsafe fn place(hwnd: Hwnd, x: f32, y: f32, width: f32, height: f32, dpi: u32, scroll: i32) {
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            pixels(x, dpi),
+            pixels(y, dpi) - scroll,
+            pixels(width, dpi),
+            pixels(height, dpi),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+unsafe fn reflow(hwnd: Hwnd) {
+    let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
+    if state.is_null() {
+        return;
+    }
+    let mut client = Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe {
+        GetClientRect(hwnd, &mut client);
+    }
+    let dpi = unsafe { (*state).dpi };
+    let width = client.right as f32 * 96.0 / dpi as f32;
+    let result = unsafe { (*state).result_view.is_some() };
+    let error = unsafe { (*state).result_error };
+    let layout = Layout::new(width, result, error);
+    let max_scroll = (pixels(layout.content_height, dpi) - client.bottom).max(0);
+    let scroll = unsafe { (*state).scroll.clamp(0, max_scroll) };
+    let visible = max_scroll > 0;
+    unsafe {
+        (*state).layout = layout;
+        (*state).scroll = scroll;
+    }
+    let current_visible = unsafe { (*state).scroll_visible };
+    if current_visible != visible {
+        unsafe {
+            (*state).scroll_visible = visible;
+            ShowScrollBar(hwnd, SB_VERT, visible as i32);
+        }
+    }
+    let info = ScrollInfo {
+        size: std::mem::size_of::<ScrollInfo>() as u32,
+        mask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        min: 0,
+        max: pixels(layout.content_height, dpi),
+        page: client.bottom as u32,
+        pos: scroll,
+        track_pos: 0,
+    };
+    unsafe {
+        SetScrollInfo(hwnd, SB_VERT, &info, 1);
+    }
+
+    let left = layout.margin + ((width - 2.0 * layout.margin - layout.width).max(0.0) / 2.0);
+    let full = layout.width;
+    let content_scroll = scroll;
+    unsafe {
+        place((*state).brand, left + 36.0, 17.0, 220.0, 30.0, dpi, 0);
+        place(
+            (*state).offline,
+            left + full - 160.0,
+            19.0,
+            160.0,
+            28.0,
+            dpi,
+            0,
+        );
+        place((*state).title, left, 88.0, full, 50.0, dpi, content_scroll);
+        place(
+            (*state).subtitle,
+            left,
+            142.0,
+            full,
+            31.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).input,
+            left + 20.0,
+            208.0,
+            (full - 106.0).max(80.0),
+            42.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).query,
+            left + full - 65.0,
+            204.0,
+            48.0,
+            48.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).result_label,
+            left,
+            273.0,
+            full,
+            22.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).result,
+            left,
+            layout.result_y,
+            full,
+            layout.result_height,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).caveat,
+            left,
+            layout.result_y + layout.result_height + 7.0,
+            full,
+            27.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).import,
+            left,
+            layout.batch_y,
+            full,
+            72.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).progress,
+            left,
+            layout.status_y,
+            full,
+            64.0,
+            dpi,
+            content_scroll,
+        );
+        InvalidateRect(hwnd, null(), 1);
+    }
+}
+
+unsafe fn draw_text(
+    dc: Handle,
+    text: &str,
+    font: Handle,
+    color: u32,
+    bounds: [f32; 4],
+    dpi: u32,
+    format: u32,
+) {
+    let mut rect = Rect {
+        left: pixels(bounds[0], dpi),
+        top: pixels(bounds[1], dpi),
+        right: pixels(bounds[0] + bounds[2], dpi),
+        bottom: pixels(bounds[1] + bounds[3], dpi),
+    };
+    unsafe {
+        let previous = SelectObject(dc, font);
+        SetTextColor(dc, color);
+        SetBkMode(dc, TRANSPARENT);
+        DrawTextW(dc, wide(text).as_ptr(), -1, &mut rect, format | DT_NOPREFIX);
+        SelectObject(dc, previous);
+    }
 }
 
 unsafe fn work_area() -> Rect {
@@ -641,92 +955,70 @@ unsafe extern "system" fn window_proc(
                 }
             };
             unsafe {
-                let font = CreateFontW(
-                    -18,
-                    0,
-                    0,
-                    0,
-                    400,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    5,
-                    0,
-                    wide("Microsoft YaHei UI").as_ptr(),
-                );
-                if font.is_null() {
-                    return -1;
-                }
-                let title_font = CreateFontW(
-                    -30,
-                    0,
-                    0,
-                    0,
-                    600,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    5,
-                    0,
-                    wide("Microsoft YaHei UI").as_ptr(),
-                );
-                let input_font = CreateFontW(
-                    -25,
-                    0,
-                    0,
-                    0,
-                    400,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    5,
-                    0,
-                    wide("Microsoft YaHei UI").as_ptr(),
-                );
-                if title_font.is_null() || input_font.is_null() {
-                    DeleteObject(font);
-                    if !title_font.is_null() {
-                        DeleteObject(title_font);
-                    }
-                    if !input_font.is_null() {
-                        DeleteObject(input_font);
+                let dpi = GetDpiForWindow(hwnd).max(96);
+                let font = make_font(17.0, 400, dpi);
+                let title_font = make_font(34.0, 650, dpi);
+                let input_font = make_font(24.0, 400, dpi);
+                let small_font = make_font(14.0, 400, dpi);
+                if [font, title_font, input_font, small_font]
+                    .iter()
+                    .any(|handle| handle.is_null())
+                {
+                    for handle in [font, title_font, input_font, small_font] {
+                        if !handle.is_null() {
+                            DeleteObject(handle);
+                        }
                     }
                     return -1;
                 }
                 let theme = Theme::read(hwnd);
-                let small_icon = LoadImageW(
+                let icon = LoadImageW(
                     GetModuleHandleW(null()),
                     APP_ICON as *const u16,
                     IMAGE_ICON,
-                    GetSystemMetrics(49),
-                    GetSystemMetrics(50),
+                    pixels(24.0, dpi),
+                    pixels(24.0, dpi),
                     LR_SHARED,
                 );
-                if !small_icon.is_null() {
-                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small_icon as isize);
+                if !icon.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon as isize);
                 }
-                let compact = work_area().bottom - work_area().top < 610;
-                create_control(
+
+                let brand = create_control(
+                    hwnd,
+                    "STATIC",
+                    "PhoneRegion",
+                    SS_LEFT,
+                    0,
+                    [0, 0, 1, 1],
+                    font,
+                );
+                let offline = create_control(
+                    hwnd,
+                    "STATIC",
+                    "离线 · 本机查询",
+                    SS_LEFT,
+                    0,
+                    [0, 0, 1, 1],
+                    small_font,
+                );
+                let title = create_control(
                     hwnd,
                     "STATIC",
                     "手机号归属地",
-                    SS_CENTER,
+                    SS_LEFT,
                     0,
-                    if compact {
-                        [64, 16, 592, 42]
-                    } else {
-                        [64, 62, 592, 48]
-                    },
+                    [0, 0, 1, 1],
                     title_font,
+                );
+                let subtitle = create_control(
+                    hwnd,
+                    "STATIC",
+                    "输入中国大陆手机号，查看号段对应的运营商、省份和地级市",
+                    SS_LEFT,
+                    0,
+                    [0, 0, 1, 1],
+                    font,
                 );
                 let input = create_control(
                     hwnd,
@@ -734,11 +1026,7 @@ unsafe extern "system" fn window_proc(
                     "",
                     WS_TABSTOP | ES_AUTOHSCROLL,
                     ID_INPUT,
-                    if compact {
-                        [90, 89, 475, 38]
-                    } else {
-                        [90, 177, 475, 42]
-                    },
+                    [0, 0, 1, 1],
                     input_font,
                 );
                 SendMessageW(
@@ -747,30 +1035,13 @@ unsafe extern "system" fn window_proc(
                     1,
                     wide("输入或粘贴手机号").as_ptr() as isize,
                 );
-                let import = create_control(
-                    hwnd,
-                    "BUTTON",
-                    "导入文件",
-                    WS_TABSTOP | BS_OWNERDRAW,
-                    ID_IMPORT,
-                    if compact {
-                        [84, 137, 171, 40]
-                    } else {
-                        [84, 230, 171, 42]
-                    },
-                    font,
-                );
-                create_control(
+                let query = create_control(
                     hwnd,
                     "BUTTON",
                     "查询",
                     WS_TABSTOP | BS_OWNERDRAW,
                     ID_QUERY,
-                    if compact {
-                        [580, 132, 48, 48]
-                    } else {
-                        [580, 225, 48, 48]
-                    },
+                    [0, 0, 1, 1],
                     input_font,
                 );
                 let result_label = create_control(
@@ -779,25 +1050,17 @@ unsafe extern "system" fn window_proc(
                     "",
                     SS_LEFT,
                     ID_RESULT_LABEL,
-                    if compact {
-                        [78, 207, 560, 24]
-                    } else {
-                        [78, 319, 560, 27]
-                    },
-                    font,
+                    [0, 0, 1, 1],
+                    small_font,
                 );
                 let result = create_control(
                     hwnd,
                     "STATIC",
                     "",
-                    SS_LEFT,
+                    SS_OWNERDRAW,
                     ID_RESULT,
-                    if compact {
-                        [78, 235, 560, 76]
-                    } else {
-                        [78, 354, 560, 89]
-                    },
-                    input_font,
+                    [0, 0, 1, 1],
+                    font,
                 );
                 let caveat = create_control(
                     hwnd,
@@ -805,29 +1068,35 @@ unsafe extern "system" fn window_proc(
                     "",
                     SS_LEFT,
                     ID_CAVEAT,
-                    if compact {
-                        [78, 312, 560, 22]
-                    } else {
-                        [78, 450, 560, 26]
-                    },
+                    [0, 0, 1, 1],
+                    small_font,
+                );
+                let import = create_control(
+                    hwnd,
+                    "BUTTON",
+                    "导入 Excel / CSV",
+                    WS_TABSTOP | BS_OWNERDRAW,
+                    ID_IMPORT,
+                    [0, 0, 1, 1],
                     font,
                 );
                 let progress = create_control(
                     hwnd,
                     "STATIC",
-                    "支持 Excel / CSV，读取第一列，结果另存为四列文件。",
+                    "支持 .xlsx、.xls、.csv，读取首列并另存为四列文件。",
                     SS_LEFT,
                     ID_PROGRESS,
-                    if compact {
-                        [78, 342, 560, 64]
-                    } else {
-                        [78, 494, 560, 64]
-                    },
-                    font,
+                    [0, 0, 1, 1],
+                    small_font,
                 );
                 let state = Box::new(UiState {
                     database,
+                    brand,
+                    offline,
+                    title,
+                    subtitle,
                     input,
+                    query,
                     result,
                     result_label,
                     caveat,
@@ -836,12 +1105,20 @@ unsafe extern "system" fn window_proc(
                     font,
                     title_font,
                     input_font,
-                    compact,
+                    small_font,
+                    dpi,
+                    scroll: 0,
+                    layout: Layout::default(),
+                    icon,
+                    result_view: None,
+                    result_error: false,
+                    scroll_visible: false,
                     theme,
                     busy: false,
                     receiver: None,
                 });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+                reflow(hwnd);
                 SetFocus(input);
             }
             0
@@ -863,14 +1140,22 @@ unsafe extern "system" fn window_proc(
                     let input = unsafe { text_of(input_hwnd) };
                     let found = database.lookup(&input);
                     let success = found.status == Status::Found;
-                    let compact = unsafe { (*state_ptr).compact };
-                    let normal_font = unsafe { (*state_ptr).input_font };
-                    let smaller_font = unsafe { (*state_ptr).font };
-                    let long_result = found.carrier.chars().count() > if compact { 14 } else { 18 }
-                        || found.province.chars().count() + found.city.chars().count() > 20;
+                    let view = if success {
+                        Some(ResultView {
+                            carrier: found.carrier.clone(),
+                            province: found.province.clone(),
+                            city: if found.city.is_empty() {
+                                "离线库未提供唯一地市".to_string()
+                            } else {
+                                found.city.clone()
+                            },
+                        })
+                    } else {
+                        None
+                    };
                     let detail = match found.status {
                         Status::Found => format!(
-                            "{}\r\n{}  {}",
+                            "运营商 {}\r\n省份 {}\r\n地级市 {}",
                             found.carrier,
                             found.province,
                             if found.city.is_empty() {
@@ -879,24 +1164,18 @@ unsafe extern "system" fn window_proc(
                                 &found.city
                             }
                         ),
-                        Status::Invalid if input_changed => "等待完整的 11 位手机号。".to_string(),
+                        Status::Invalid if input_changed => String::new(),
                         Status::Invalid => "请输入 11 位中国大陆手机号。".to_string(),
                         Status::Missing => "离线号段库未收录该号码前 7 位。".to_string(),
                         Status::Empty if input_changed => String::new(),
                         Status::Empty => "请输入手机号。".to_string(),
                     };
                     unsafe {
-                        SendMessageW(
-                            result_hwnd,
-                            WM_SETFONT,
-                            if long_result {
-                                smaller_font
-                            } else {
-                                normal_font
-                            } as usize,
-                            1,
-                        );
-                        set_text(label_hwnd, if success { "号段查询结果" } else { "" });
+                        (*state_ptr).result_view = view;
+                        (*state_ptr).result_error = !success && !detail.is_empty();
+                    }
+                    unsafe {
+                        set_text(label_hwnd, if success { "查询结果" } else { "" });
                         set_text(result_hwnd, &detail);
                         set_text(
                             caveat_hwnd,
@@ -906,6 +1185,7 @@ unsafe extern "system" fn window_proc(
                                 ""
                             },
                         );
+                        reflow(hwnd);
                     }
                 }
                 ID_IMPORT if !unsafe { (*state_ptr).busy } => {
@@ -1025,9 +1305,11 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             let brush = unsafe { (*state).theme.surface_brush };
-            let field_brush = unsafe { (*state).theme.field_brush };
-            let border_pen = unsafe { (*state).theme.border_pen };
-            let compact = unsafe { (*state).compact };
+            let colors = unsafe { (*state).theme.colors };
+            let layout = unsafe { (*state).layout };
+            let dpi = unsafe { (*state).dpi };
+            let scroll = unsafe { (*state).scroll } as f32 * 96.0 / dpi as f32;
+            let icon = unsafe { (*state).icon };
             let mut rect = Rect {
                 left: 0,
                 top: 0,
@@ -1037,15 +1319,58 @@ unsafe extern "system" fn window_proc(
             unsafe {
                 GetClientRect(hwnd, &mut rect);
                 FillRect(wparam as Handle, &rect, brush);
-                let old_brush = SelectObject(wparam as Handle, field_brush);
-                let old_pen = SelectObject(wparam as Handle, border_pen);
-                if compact {
-                    RoundRect(wparam as Handle, 64, 70, 656, 190, 34, 34);
-                } else {
-                    RoundRect(wparam as Handle, 64, 155, 656, 287, 34, 34);
+                if !icon.is_null() {
+                    DrawIconEx(
+                        wparam as Handle,
+                        pixels(
+                            layout.margin
+                                + ((rect.right as f32 * 96.0 / dpi as f32
+                                    - 2.0 * layout.margin
+                                    - layout.width)
+                                    .max(0.0)
+                                    / 2.0),
+                            dpi,
+                        ),
+                        pixels(20.0, dpi),
+                        icon,
+                        pixels(24.0, dpi),
+                        pixels(24.0, dpi),
+                        0,
+                        null_mut(),
+                        3,
+                    );
                 }
-                SelectObject(wparam as Handle, old_pen);
-                SelectObject(wparam as Handle, old_brush);
+            }
+            if let Ok(canvas) = Canvas::new(wparam as Handle, dpi) {
+                let client_width = rect.right as f32 * 96.0 / dpi as f32;
+                let _ = canvas.line(0.0, 65.0, client_width, 65.0, 1.0, rgb(colors.border));
+                let _ = canvas.fill_round_rect(
+                    layout.margin
+                        + ((rect.right as f32 * 96.0 / dpi as f32
+                            - 2.0 * layout.margin
+                            - layout.width)
+                            .max(0.0)
+                            / 2.0),
+                    190.0 - scroll,
+                    layout.width,
+                    72.0,
+                    18.0,
+                    rgb(colors.field),
+                );
+                let _ = canvas.stroke_round_rect(
+                    layout.margin
+                        + ((rect.right as f32 * 96.0 / dpi as f32
+                            - 2.0 * layout.margin
+                            - layout.width)
+                            .max(0.0)
+                            / 2.0),
+                    190.0 - scroll,
+                    layout.width,
+                    72.0,
+                    18.0,
+                    1.0,
+                    rgb(colors.border),
+                );
             }
             1
         }
@@ -1059,7 +1384,9 @@ unsafe extern "system" fn window_proc(
             let field_brush = unsafe { (*state).theme.field_brush };
             let edit = msg == WM_CTLCOLOREDIT;
             let secondary = !edit
-                && (lparam as Hwnd == unsafe { (*state).result_label }
+                && (lparam as Hwnd == unsafe { (*state).offline }
+                    || lparam as Hwnd == unsafe { (*state).subtitle }
+                    || lparam as Hwnd == unsafe { (*state).result_label }
                     || lparam as Hwnd == unsafe { (*state).caveat }
                     || lparam as Hwnd == unsafe { (*state).progress });
             unsafe {
@@ -1085,131 +1412,347 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             let item = unsafe { *(lparam as *const DrawItem) };
-            if item.control_id != ID_QUERY as u32 && item.control_id != ID_IMPORT as u32 {
+            if ![ID_QUERY as u32, ID_IMPORT as u32, ID_RESULT as u32].contains(&item.control_id) {
                 return 0;
             }
             let colors = unsafe { (*state).theme.colors };
-            let high_contrast = unsafe { (*state).theme.high_contrast };
-            let field_brush = unsafe { (*state).theme.field_brush };
-            let button_brush = unsafe { (*state).theme.button_brush };
-            let accent_brush = unsafe { (*state).theme.accent_brush };
-            let border_pen = unsafe { (*state).theme.border_pen };
-            let accent_pen = unsafe { (*state).theme.accent_pen };
+            let dpi = unsafe { (*state).dpi };
             let font = unsafe { (*state).font };
-            let disabled = item.state & ODS_DISABLED != 0;
+            let small_font = unsafe { (*state).small_font };
+            let input_font = unsafe { (*state).input_font };
+            let result = unsafe { (*state).result_view.clone() };
+            let columns = unsafe { (*state).layout.columns };
+            let high_contrast = unsafe { (*state).theme.high_contrast };
+            let w = (item.rect.right - item.rect.left) as f32 * 96.0 / dpi as f32;
+            let h = (item.rect.bottom - item.rect.top) as f32 * 96.0 / dpi as f32;
             let selected = item.state & ODS_SELECTED != 0;
-            let query = item.control_id == ID_QUERY as u32;
-            let text_color = if query && selected {
-                colors.text
-            } else if query || selected && high_contrast {
-                colors.accent_text
-            } else if disabled {
-                colors.disabled
-            } else {
-                colors.button_text
-            };
-            let rect = item.rect;
+            let disabled = item.state & ODS_DISABLED != 0;
+            let focused = item.state & ODS_FOCUS != 0;
             unsafe {
-                FillRect(item.dc, &rect, field_brush);
-                if query {
-                    let old_brush =
-                        SelectObject(item.dc, if selected { field_brush } else { accent_brush });
-                    let old_pen = SelectObject(item.dc, accent_pen);
-                    Ellipse(
-                        item.dc,
-                        rect.left + 1,
-                        rect.top + 1,
-                        rect.right - 1,
-                        rect.bottom - 1,
-                    );
-                    SelectObject(item.dc, old_pen);
-                    SelectObject(item.dc, old_brush);
-                } else if selected {
-                    let fill = if high_contrast {
-                        accent_brush
-                    } else {
-                        button_brush
-                    };
-                    let old_brush = SelectObject(item.dc, fill);
-                    let old_pen = SelectObject(item.dc, border_pen);
-                    RoundRect(
-                        item.dc,
-                        rect.left + 1,
-                        rect.top + 1,
-                        rect.right - 1,
-                        rect.bottom - 1,
-                        20,
-                        20,
-                    );
-                    SelectObject(item.dc, old_pen);
-                    SelectObject(item.dc, old_brush);
-                }
-                SetBkMode(item.dc, TRANSPARENT);
-                let cx = (rect.left + rect.right) / 2;
-                let cy = (rect.top + rect.bottom) / 2;
-                let stroke = CreatePen(0, if query { 3 } else { 2 }, text_color);
-                let old_pen = SelectObject(item.dc, stroke);
-                if query {
-                    MoveToEx(item.dc, cx, cy + 10, null_mut());
-                    LineTo(item.dc, cx, cy - 10);
-                    MoveToEx(item.dc, cx - 8, cy - 2, null_mut());
-                    LineTo(item.dc, cx, cy - 10);
-                    LineTo(item.dc, cx + 8, cy - 2);
-                } else {
-                    let plus_x = rect.left + 24;
-                    MoveToEx(item.dc, plus_x - 6, cy, null_mut());
-                    LineTo(item.dc, plus_x + 6, cy);
-                    MoveToEx(item.dc, plus_x, cy - 6, null_mut());
-                    LineTo(item.dc, plus_x, cy + 6);
-                    let old_font = SelectObject(item.dc, font);
-                    SetTextColor(item.dc, text_color);
-                    let label = text_of(item.hwnd);
-                    let mut label_rect = Rect {
-                        left: rect.left + 43,
-                        top: rect.top,
-                        right: rect.right,
-                        bottom: rect.bottom,
-                    };
-                    DrawTextW(
-                        item.dc,
-                        wide(&label).as_ptr(),
-                        -1,
-                        &mut label_rect,
-                        DT_VCENTER | DT_SINGLELINE,
-                    );
-                    SelectObject(item.dc, old_font);
-                }
-                SelectObject(item.dc, old_pen);
-                DeleteObject(stroke);
-                if item.state & ODS_FOCUS != 0 {
-                    let ring = CreatePen(0, 2, text_color);
-                    let old_pen = SelectObject(item.dc, ring);
-                    let old_brush = SelectObject(item.dc, GetStockObject(5));
-                    if query {
-                        Ellipse(
-                            item.dc,
-                            rect.left + 6,
-                            rect.top + 6,
-                            rect.right - 6,
-                            rect.bottom - 6,
-                        );
-                    } else {
-                        RoundRect(
-                            item.dc,
-                            rect.left + 3,
-                            rect.top + 3,
-                            rect.right - 3,
-                            rect.bottom - 3,
-                            18,
-                            18,
-                        );
+                FillRect(item.dc, &item.rect, (*state).theme.surface_brush);
+            }
+            if let Ok(canvas) = Canvas::new(item.dc, dpi) {
+                match item.control_id as i32 {
+                    ID_QUERY => {
+                        let fill = if selected {
+                            colors.field
+                        } else {
+                            colors.accent
+                        };
+                        let ink = if selected {
+                            colors.text
+                        } else {
+                            colors.accent_text
+                        };
+                        let _ = canvas.fill_circle(w / 2.0, h / 2.0, 23.0, rgb(fill));
+                        if selected || high_contrast {
+                            let _ = canvas.stroke_circle(
+                                w / 2.0,
+                                h / 2.0,
+                                22.5,
+                                1.0,
+                                rgb(colors.border),
+                            );
+                        }
+                        let cx = w / 2.0;
+                        let cy = h / 2.0;
+                        let _ = canvas.line(cx, cy + 9.0, cx, cy - 8.0, 2.7, rgb(ink));
+                        let _ = canvas.line(cx - 7.0, cy - 1.0, cx, cy - 8.0, 2.7, rgb(ink));
+                        let _ = canvas.line(cx, cy - 8.0, cx + 7.0, cy - 1.0, 2.7, rgb(ink));
+                        if focused {
+                            let _ = canvas.stroke_circle(cx, cy, 18.0, 1.5, rgb(ink));
+                        }
                     }
-                    SelectObject(item.dc, old_brush);
-                    SelectObject(item.dc, old_pen);
-                    DeleteObject(ring);
+                    ID_IMPORT => {
+                        let surface = if selected {
+                            colors.button
+                        } else {
+                            colors.field
+                        };
+                        let _ =
+                            canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 15.0, rgb(surface));
+                        let _ = canvas.stroke_round_rect(
+                            1.0,
+                            1.0,
+                            w - 2.0,
+                            h - 2.0,
+                            15.0,
+                            if focused { 2.0 } else { 1.0 },
+                            rgb(if focused { colors.text } else { colors.border }),
+                        );
+                        let icon_ink = if disabled {
+                            colors.disabled
+                        } else {
+                            colors.text
+                        };
+                        let _ = canvas.stroke_round_rect(
+                            19.0,
+                            19.0,
+                            32.0,
+                            32.0,
+                            9.0,
+                            1.2,
+                            rgb(colors.border),
+                        );
+                        let _ = canvas.line(35.0, 28.0, 35.0, 42.0, 2.2, rgb(icon_ink));
+                        let _ = canvas.line(28.0, 35.0, 42.0, 35.0, 2.2, rgb(icon_ink));
+                        unsafe {
+                            draw_text(
+                                item.dc,
+                                "导入 Excel 或 CSV 文件",
+                                font,
+                                icon_ink,
+                                [64.0, 11.0, w - 80.0, 27.0],
+                                dpi,
+                                DT_SINGLELINE | DT_VCENTER,
+                            );
+                            draw_text(
+                                item.dc,
+                                "读取首列手机号，另存为含运营商、省份和地级市的四列文件",
+                                small_font,
+                                colors.muted,
+                                [64.0, 38.0, w - 80.0, 25.0],
+                                dpi,
+                                DT_SINGLELINE | DT_VCENTER,
+                            );
+                        }
+                    }
+                    ID_RESULT => {
+                        if let Some(view) = result {
+                            let _ = canvas.fill_round_rect(
+                                1.0,
+                                1.0,
+                                w - 2.0,
+                                h - 2.0,
+                                16.0,
+                                rgb(colors.field),
+                            );
+                            let _ = canvas.stroke_round_rect(
+                                1.0,
+                                1.0,
+                                w - 2.0,
+                                h - 2.0,
+                                16.0,
+                                1.0,
+                                rgb(colors.border),
+                            );
+                            let entries = [
+                                ("运营商", view.carrier),
+                                ("归属地省份", view.province),
+                                ("归属地地级市", view.city),
+                            ];
+                            for (index, (label, value)) in entries.iter().enumerate() {
+                                let (x, y, cell_w) = if columns {
+                                    (
+                                        20.0 + index as f32 * (w - 40.0) / 3.0,
+                                        17.0,
+                                        (w - 40.0) / 3.0 - 16.0,
+                                    )
+                                } else {
+                                    (20.0, 14.0 + index as f32 * 68.0, w - 40.0)
+                                };
+                                unsafe {
+                                    draw_text(
+                                        item.dc,
+                                        label,
+                                        small_font,
+                                        colors.muted,
+                                        [x, y, cell_w, 22.0],
+                                        dpi,
+                                        DT_SINGLELINE | DT_VCENTER,
+                                    );
+                                    draw_text(
+                                        item.dc,
+                                        value,
+                                        input_font,
+                                        colors.text,
+                                        [x, y + 27.0, cell_w, 67.0],
+                                        dpi,
+                                        DT_WORDBREAK,
+                                    );
+                                }
+                            }
+                        } else {
+                            let message = unsafe { text_of(item.hwnd) };
+                            unsafe {
+                                draw_text(
+                                    item.dc,
+                                    &message,
+                                    font,
+                                    colors.text,
+                                    [0.0, 0.0, w, h],
+                                    dpi,
+                                    DT_WORDBREAK | DT_NOPREFIX,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             1
+        }
+        WM_SIZE => {
+            unsafe {
+                reflow(hwnd);
+            }
+            0
+        }
+        WM_DPICHANGED => {
+            let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
+            if state.is_null() {
+                return 0;
+            }
+            let dpi = ((wparam & 0xffff) as u32).max(96);
+            let new_fonts = unsafe {
+                [
+                    make_font(17.0, 400, dpi),
+                    make_font(34.0, 650, dpi),
+                    make_font(24.0, 400, dpi),
+                    make_font(14.0, 400, dpi),
+                ]
+            };
+            if new_fonts.iter().any(|font| font.is_null()) {
+                for font in new_fonts {
+                    if !font.is_null() {
+                        unsafe {
+                            DeleteObject(font);
+                        }
+                    }
+                }
+                return 0;
+            }
+            let controls = unsafe {
+                [
+                    (*state).brand,
+                    (*state).offline,
+                    (*state).title,
+                    (*state).subtitle,
+                    (*state).input,
+                    (*state).query,
+                    (*state).result_label,
+                    (*state).result,
+                    (*state).caveat,
+                    (*state).import,
+                    (*state).progress,
+                ]
+            };
+            let old_fonts = unsafe {
+                [
+                    (*state).font,
+                    (*state).title_font,
+                    (*state).input_font,
+                    (*state).small_font,
+                ]
+            };
+            unsafe {
+                (*state).font = new_fonts[0];
+                (*state).title_font = new_fonts[1];
+                (*state).input_font = new_fonts[2];
+                (*state).small_font = new_fonts[3];
+                (*state).dpi = dpi;
+                (*state).scroll = 0;
+                for (index, control) in controls.into_iter().enumerate() {
+                    let font = match index {
+                        2 => new_fonts[1],
+                        4 | 5 | 7 => new_fonts[2],
+                        1 | 6 | 8 | 10 => new_fonts[3],
+                        _ => new_fonts[0],
+                    };
+                    SendMessageW(control, WM_SETFONT, font as usize, 0);
+                }
+                for font in old_fonts {
+                    DeleteObject(font);
+                }
+                let icon = LoadImageW(
+                    GetModuleHandleW(null()),
+                    APP_ICON as *const u16,
+                    IMAGE_ICON,
+                    pixels(24.0, dpi),
+                    pixels(24.0, dpi),
+                    LR_SHARED,
+                );
+                if !icon.is_null() {
+                    (*state).icon = icon;
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon as isize);
+                }
+                if lparam != 0 {
+                    let rect = *(lparam as *const Rect);
+                    SetWindowPos(
+                        hwnd,
+                        null_mut(),
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                    );
+                }
+                reflow(hwnd);
+            }
+            0
+        }
+        WM_GETMINMAXINFO => {
+            if lparam != 0 {
+                let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+                unsafe {
+                    (*(lparam as *mut MinMaxInfo)).min_track_size = Point {
+                        x: pixels(540.0, dpi),
+                        y: pixels(350.0, dpi),
+                    };
+                }
+            }
+            0
+        }
+        WM_VSCROLL | WM_MOUSEWHEEL => {
+            let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
+            if state.is_null() {
+                return 0;
+            }
+            let dpi = unsafe { (*state).dpi };
+            let mut scroll = unsafe { (*state).scroll };
+            if msg == WM_MOUSEWHEEL {
+                let delta = ((wparam >> 16) as u16) as i16 as i32;
+                scroll -= delta.signum() * pixels(65.0, dpi);
+            } else {
+                let request = wparam & 0xffff;
+                let mut client = Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                unsafe {
+                    GetClientRect(hwnd, &mut client);
+                }
+                scroll = match request {
+                    SB_LINEUP => scroll - pixels(40.0, dpi),
+                    SB_LINEDOWN => scroll + pixels(40.0, dpi),
+                    SB_PAGEUP => scroll - client.bottom,
+                    SB_PAGEDOWN => scroll + client.bottom,
+                    SB_THUMBTRACK => {
+                        let mut info = ScrollInfo {
+                            size: std::mem::size_of::<ScrollInfo>() as u32,
+                            mask: SIF_TRACKPOS,
+                            min: 0,
+                            max: 0,
+                            page: 0,
+                            pos: 0,
+                            track_pos: 0,
+                        };
+                        unsafe {
+                            GetScrollInfo(hwnd, SB_VERT, &mut info);
+                        }
+                        info.track_pos
+                    }
+                    _ => scroll,
+                };
+            }
+            unsafe {
+                (*state).scroll = scroll;
+                reflow(hwnd);
+            }
+            0
         }
         WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED => {
             let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UiState };
@@ -1247,6 +1790,7 @@ unsafe extern "system" fn window_proc(
                     DeleteObject(state.font);
                     DeleteObject(state.title_font);
                     DeleteObject(state.input_font);
+                    DeleteObject(state.small_font);
                     state.theme.delete();
                 }
             }
@@ -1257,7 +1801,7 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-pub fn run() -> Result<(), String> {
+unsafe fn create_main_window() -> Result<Hwnd, String> {
     unsafe {
         let instance = GetModuleHandleW(null());
         let class_name = wide("PhoneRegionMainWindow");
@@ -1269,7 +1813,7 @@ pub fn run() -> Result<(), String> {
             instance,
             icon: LoadIconW(instance, APP_ICON as *const u16),
             cursor: LoadCursorW(null_mut(), IDC_ARROW as *const u16),
-            background: GetSysColorBrush(15),
+            background: GetSysColorBrush(COLOR_BTNFACE),
             menu_name: null(),
             class_name: class_name.as_ptr(),
         };
@@ -1278,19 +1822,23 @@ pub fn run() -> Result<(), String> {
         }
         let title = wide("手机号归属地 · 离线查询");
         let available = work_area();
-        let height = if available.bottom - available.top < 610 {
-            440
-        } else {
-            610
-        };
+        let system_dpi = GetDpiForSystem().max(96);
+        let width = pixels(960.0, system_dpi).min(available.right - available.left);
+        let height = pixels(700.0, system_dpi).min(available.bottom - available.top);
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-            available.left + (available.right - available.left - 720).max(0) / 2,
+            WS_CAPTION
+                | WS_SYSMENU
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_THICKFRAME
+                | WS_VSCROLL
+                | WS_VISIBLE,
+            available.left + (available.right - available.left - width).max(0) / 2,
             available.top + (available.bottom - available.top - height).max(0) / 2,
-            720,
+            width,
             height,
             null_mut(),
             null_mut(),
@@ -1298,8 +1846,16 @@ pub fn run() -> Result<(), String> {
             null_mut(),
         );
         if hwnd.is_null() {
-            return Err("无法创建窗口或读取离线号段库".to_string());
+            Err("无法创建窗口或读取离线号段库".to_string())
+        } else {
+            Ok(hwnd)
         }
+    }
+}
+
+pub fn run() -> Result<(), String> {
+    unsafe {
+        let hwnd = create_main_window()?;
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         let mut message = std::mem::zeroed::<Message>();
@@ -1354,7 +1910,6 @@ mod tests {
             assert!(contrast(colors.text, colors.surface) >= 4.5);
             assert!(contrast(colors.text, colors.field) >= 4.5);
             assert!(contrast(colors.muted, colors.surface) >= 4.5);
-            assert!(contrast(colors.button_text, colors.button) >= 4.5);
             assert!(contrast(colors.disabled, colors.button) >= 3.0);
             assert!(contrast(colors.accent_text, colors.accent) >= 7.0);
         }

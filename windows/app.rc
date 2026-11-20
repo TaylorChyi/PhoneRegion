@@ -4,8 +4,8 @@
 102 ICON "windows/phone-region.ico"
 
 1 VERSIONINFO
-FILEVERSION 1,1,0,0
-PRODUCTVERSION 1,1,0,0
+FILEVERSION 1,2,0,0
+PRODUCTVERSION 1,2,0,0
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -14,9 +14,9 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "FileDescription", "Offline mobile number lookup\0"
-            VALUE "FileVersion", "1.1.0\0"
+            VALUE "FileVersion", "1.2.0\0"
             VALUE "ProductName", "PhoneRegion\0"
-            VALUE "ProductVersion", "1.1.0\0"
+            VALUE "ProductVersion", "1.2.0\0"
             VALUE "OriginalFilename", "PhoneRegion.exe\0"
         END
     END

@@ -96,6 +96,28 @@ public static class NativeWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetClientRect(IntPtr window, out WindowRect rect);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y,
+        int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsZoomed(IntPtr window);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsIconic(IntPtr window);
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr window, uint attribute,
         out WindowRect bounds, int size);
@@ -252,6 +274,79 @@ function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
     }
 }
 
+function Read-WindowRect([IntPtr]$Window) {
+    $rect = [NativeWindow+WindowRect]::new()
+    if (-not [NativeWindow]::GetWindowRect($Window, [ref]$rect)) {
+        throw 'Could not read the native window rectangle.'
+    }
+    return $rect
+}
+
+function Assert-ControlBounds([IntPtr]$Window, [int[]]$Ids) {
+    $outer = Read-WindowRect $Window
+    foreach ($id in $Ids) {
+        $control = [NativeWindow]::GetDlgItem($Window, $id)
+        if ($control -eq [IntPtr]::Zero) { throw "Missing control $id after resizing." }
+        $child = Read-WindowRect $control
+        if ($child.right -le $child.left -or $child.bottom -le $child.top -or
+            $child.left -lt $outer.left -or $child.right -gt $outer.right -or
+            $child.top -lt $outer.top -or $child.bottom -gt $outer.bottom) {
+            throw "Control $id extends beyond the resized application window."
+        }
+    }
+}
+
+function Check-WindowLayouts([IntPtr]$Window, [IntPtr]$ResultControl) {
+    $original = Read-WindowRect $Window
+    $clientWidths = @()
+    $resultHeights = @()
+    try {
+        foreach ($width in @(1080, 720)) {
+            if (-not [NativeWindow]::SetWindowPos($Window, [IntPtr]::Zero,
+                $original.left, $original.top, $width, 780, 0x0004)) {
+                throw "Could not resize the window to $width pixels."
+            }
+            Start-Sleep -Milliseconds 160
+            $client = [NativeWindow+WindowRect]::new()
+            if (-not [NativeWindow]::GetClientRect($Window, [ref]$client)) {
+                throw 'Could not read the resized client area.'
+            }
+            $clientWidths += $client.right - $client.left
+            Assert-ControlBounds $Window @(1001, 1002, 1003, 1004, 1005)
+            $resultRect = Read-WindowRect $ResultControl
+            $resultHeights += $resultRect.bottom - $resultRect.top
+            if (-not (Read-WindowText $ResultControl).Contains('中国联通')) {
+                throw 'The lookup result disappeared while resizing.'
+            }
+        }
+        if ($clientWidths[0] - $clientWidths[1] -lt 200) {
+            throw 'The wide and narrow layouts did not receive distinct client widths.'
+        }
+        if ($resultHeights[1] - $resultHeights[0] -lt 70) {
+            throw 'The narrow layout did not switch the result from columns to rows.'
+        }
+        [void][NativeWindow]::ShowWindow($Window, 3)
+        Start-Sleep -Milliseconds 160
+        if (-not [NativeWindow]::IsZoomed($Window)) {
+            throw 'The application did not maximise.'
+        }
+        [void][NativeWindow]::ShowWindow($Window, 9)
+        [void][NativeWindow]::ShowWindow($Window, 6)
+        Start-Sleep -Milliseconds 120
+        if (-not [NativeWindow]::IsIconic($Window)) {
+            throw 'The application did not minimise.'
+        }
+        [void][NativeWindow]::ShowWindow($Window, 9)
+    }
+    finally {
+        [void][NativeWindow]::ShowWindow($Window, 9)
+        [void][NativeWindow]::SetWindowPos($Window, [IntPtr]::Zero,
+            $original.left, $original.top,
+            $original.right - $original.left, $original.bottom - $original.top, 0x0004)
+    }
+    return $clientWidths
+}
+
 $source = (Resolve-Path -LiteralPath $ExePath).Path
 $demoEnabled = -not [string]::IsNullOrWhiteSpace($DemoDirectory)
 if ($demoEnabled) {
@@ -313,11 +408,31 @@ try {
         throw 'The phone input, query button or visible result control is missing.'
     }
 
+    $dpiContext = [NativeWindow]::GetWindowDpiAwarenessContext($window)
+    if (-not [NativeWindow]::AreDpiAwarenessContextsEqual($dpiContext, [IntPtr](-4))) {
+        throw 'The application window is not running with Per-Monitor-v2 DPI awareness.'
+    }
+    $realWindowDpi = [NativeWindow]::GetDpiForWindow($window)
+    if ($realWindowDpi -lt 96) { throw "Unexpected real Windows display DPI: $realWindowDpi" }
+    Write-Host "Actual runner display DPI: $realWindowDpi; window context: Per-Monitor-v2."
+
     if ($demoEnabled) {
         Save-DemoFrame $window '01-empty.png'
     }
     Assert-Result $inputControl $queryControl $resultControl '13213000000' @('中国联通', '河南省', '郑州市') @() -Live
     Save-DemoFrame $window '02-single-result.png'
+    $clientWidths = Check-WindowLayouts $window $resultControl
+    if ($demoEnabled) {
+        $validation = @{
+            real_display_dpi = $realWindowDpi
+            dpi_awareness = 'Per-Monitor-v2'
+            dpi_144_192_in_external_process = 'not simulated'
+            wide_client_width = $clientWidths[0]
+            narrow_client_width = $clientWidths[1]
+            window_actions = @('resize', 'maximise', 'minimise', 'restore')
+        }
+        $validation | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $DemoDirectory 'validation.json') -Encoding utf8
+    }
     if ($demoEnabled) {
         foreach ($stage in @(
             @('03-prefix.png', '+86'),
