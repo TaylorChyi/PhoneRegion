@@ -1,0 +1,57 @@
+name: Windows build and smoke test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check locked dependencies
+        run: cargo test --locked --all-targets
+      - name: Build Windows application
+        run: cargo build --release --locked
+      - name: Exercise offline interface in light and dark themes
+        shell: pwsh
+        run: |
+          $themeKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+          $hadThemeKey = Test-Path -LiteralPath $themeKey
+          $originalTheme = if ($hadThemeKey) {
+            (Get-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue).AppsUseLightTheme
+          }
+          try {
+            New-Item -Path $themeKey -Force | Out-Null
+            foreach ($theme in @(1, 0)) {
+              Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value $theme
+              ./scripts/windows-smoke.ps1 -ExePath ./target/release/PhoneRegion.exe -BlockNetwork
+              if (Test-Path -LiteralPath ./download/PhoneRegion.exe) {
+                ./scripts/windows-smoke.ps1 -ExePath ./download/PhoneRegion.exe -BlockNetwork
+              }
+            }
+          }
+          finally {
+            if ($null -ne $originalTheme) {
+              Set-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -Value $originalTheme
+            }
+            else {
+              Remove-ItemProperty -LiteralPath $themeKey -Name AppsUseLightTheme -ErrorAction SilentlyContinue
+            }
+            if (-not $hadThemeKey) {
+              Remove-Item -LiteralPath $themeKey -Force -ErrorAction SilentlyContinue
+            }
+          }
+      - name: Upload tested application
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhoneRegion-Windows-x64
+          path: target/release/PhoneRegion.exe
+          if-no-files-found: error

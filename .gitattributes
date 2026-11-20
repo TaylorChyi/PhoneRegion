@@ -1,0 +1,7 @@
+* text=auto
+*.dat binary
+*.exe binary
+*.xls binary
+*.zip binary
+# Empty fourth fields in the region table represent an unknown prefecture.
+data/regions.tsv text eol=lf whitespace=-blank-at-eol
