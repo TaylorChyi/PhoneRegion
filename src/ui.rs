@@ -429,6 +429,7 @@ struct Layout {
     status_y: f32,
     content_height: f32,
     columns: bool,
+    sample_own_row: bool,
 }
 
 impl Layout {
@@ -438,8 +439,9 @@ impl Layout {
         let columns = width >= 720.0;
         let result_y = 190.0;
         let result_height = if columns { 112.0 } else { 294.0 };
-        let batch_y = result_y + result_height + 38.0;
-        let status_y = batch_y + 148.0;
+        let sample_own_row = width < 640.0;
+        let batch_y = result_y + result_height + if sample_own_row { 78.0 } else { 44.0 };
+        let status_y = batch_y + 126.0;
         Self {
             margin,
             width,
@@ -454,6 +456,7 @@ impl Layout {
                     68.0
                 },
             columns,
+            sample_own_row,
         }
     }
 }
@@ -469,6 +472,7 @@ struct Colors {
     muted: u32,
     accent: u32,
     accent_text: u32,
+    carrier_note: u32,
 }
 
 struct Theme {
@@ -521,6 +525,7 @@ impl Theme {
                     muted: GetSysColor(COLOR_WINDOWTEXT),
                     accent: GetSysColor(COLOR_HIGHLIGHT),
                     accent_text: GetSysColor(COLOR_HIGHLIGHTTEXT),
+                    carrier_note: GetSysColor(COLOR_WINDOWTEXT),
                 }
             }
         } else {
@@ -562,6 +567,7 @@ fn colors_for_mode(dark: bool) -> Colors {
             muted: 0x00B9B9B9,
             accent: 0x00F3F3F3,
             accent_text: 0x001E1E1E,
+            carrier_note: 0x0019FFF8, // EE yellow #F8FF19 (COLORREF).
         }
     } else {
         Colors {
@@ -574,6 +580,7 @@ fn colors_for_mode(dark: bool) -> Colors {
             muted: 0x006A6A6A,
             accent: 0x001E1E1E,
             accent_text: 0x00FFFFFF,
+            carrier_note: 0x00222727, // Charcoal #272722 (COLORREF).
         }
     }
 }
@@ -754,8 +761,21 @@ unsafe fn reflow(hwnd: Hwnd) {
             (*state).caveat,
             left,
             layout.result_y + layout.result_height + 7.0,
-            full,
+            if layout.sample_own_row {
+                full
+            } else {
+                full - 174.0
+            },
             27.0,
+            dpi,
+            content_scroll,
+        );
+        place(
+            (*state).sample,
+            left + full - 154.0,
+            layout.result_y + layout.result_height + if layout.sample_own_row { 38.0 } else { 5.0 },
+            154.0,
+            32.0,
             dpi,
             content_scroll,
         );
@@ -765,15 +785,6 @@ unsafe fn reflow(hwnd: Hwnd) {
             layout.batch_y,
             full,
             112.0,
-            dpi,
-            content_scroll,
-        );
-        place(
-            (*state).sample,
-            left + full - 164.0,
-            layout.batch_y + 115.0,
-            164.0,
-            29.0,
             dpi,
             content_scroll,
         );
@@ -1682,20 +1693,26 @@ unsafe extern "system" fn window_proc(
                     ID_SAMPLE => {
                         let ink = if disabled {
                             colors.disabled
+                        } else if selected {
+                            colors.accent_text
                         } else {
-                            colors.muted
+                            colors.text
                         };
-                        if selected || focused {
-                            let _ = canvas.stroke_round_rect(
-                                1.0,
-                                1.0,
-                                w - 2.0,
-                                h - 2.0,
-                                8.0,
-                                if focused { 2.0 } else { 1.0 },
-                                rgb(colors.border),
-                            );
-                        }
+                        let fill = if selected && !disabled {
+                            colors.accent
+                        } else {
+                            colors.field
+                        };
+                        let _ = canvas.fill_round_rect(1.0, 1.0, w - 2.0, h - 2.0, 10.0, rgb(fill));
+                        let _ = canvas.stroke_round_rect(
+                            1.0,
+                            1.0,
+                            w - 2.0,
+                            h - 2.0,
+                            10.0,
+                            if focused { 2.0 } else { 1.0 },
+                            rgb(if focused { ink } else { colors.border }),
+                        );
                         unsafe {
                             draw_text(
                                 item.dc,
@@ -1710,45 +1727,18 @@ unsafe extern "system" fn window_proc(
                     }
                     ID_CAVEAT => {
                         let note = unsafe { (*state).result_note };
-                        let highlighted = note == CARRIER_NOTE && !high_contrast;
-                        let mut inset = 0.0;
-                        let mut ink = colors.muted;
-                        if highlighted {
-                            // The icon's EE yellow (#F8FF19) needs a dark backing on a light surface.
-                            ink = 0x0019FFF8;
-                            if colors.surface == colors_for_mode(false).surface {
-                                inset = 8.0;
-                                let mut measured = item.rect;
-                                unsafe {
-                                    let previous = SelectObject(item.dc, small_font);
-                                    DrawTextW(
-                                        item.dc,
-                                        wide(note).as_ptr(),
-                                        -1,
-                                        &mut measured,
-                                        DT_SINGLELINE | DT_NOPREFIX | 0x0400, /* DT_CALCRECT */
-                                    );
-                                    SelectObject(item.dc, previous);
-                                }
-                                let text_width =
-                                    (measured.right - measured.left) as f32 * 96.0 / dpi as f32;
-                                let _ = canvas.fill_round_rect(
-                                    0.0,
-                                    1.0,
-                                    (text_width + inset * 2.0).min(w),
-                                    h - 2.0,
-                                    6.0,
-                                    0x272722,
-                                );
-                            }
-                        }
+                        let ink = if note == CARRIER_NOTE {
+                            colors.carrier_note
+                        } else {
+                            colors.muted
+                        };
                         unsafe {
                             draw_text(
                                 item.dc,
                                 note,
                                 small_font,
                                 ink,
-                                [inset, 0.0, w - inset, h],
+                                [0.0, 0.0, w, h],
                                 dpi,
                                 DT_SINGLELINE | DT_VCENTER,
                             );
@@ -2146,6 +2136,7 @@ mod tests {
             assert!(contrast(colors.text, colors.surface) >= 4.5);
             assert!(contrast(colors.text, colors.field) >= 4.5);
             assert!(contrast(colors.muted, colors.surface) >= 4.5);
+            assert!(contrast(colors.carrier_note, colors.surface) >= 4.5);
             assert!(contrast(colors.disabled, colors.button) >= 3.0);
             assert!(contrast(colors.accent_text, colors.accent) >= 7.0);
         }

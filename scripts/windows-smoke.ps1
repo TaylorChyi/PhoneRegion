@@ -457,6 +457,26 @@ function Assert-ControlBounds([IntPtr]$Window, [int[]]$Ids) {
     }
 }
 
+function Assert-SamplePlacement([IntPtr]$Window, [bool]$Narrow) {
+    $note = Read-WindowRect ([NativeWindow]::GetDlgItem($Window, 1007))
+    $sample = Read-WindowRect ([NativeWindow]::GetDlgItem($Window, 1009))
+    $import = Read-WindowRect ([NativeWindow]::GetDlgItem($Window, 1003))
+    if ($sample.bottom -gt $import.top) {
+        throw 'The example CSV button overlaps the file drop area.'
+    }
+    if ($Narrow) {
+        if ($sample.top -lt $note.bottom) {
+            throw 'The narrow layout did not move the example CSV button below the carrier note.'
+        }
+    }
+    else {
+        if ($sample.top -ge $note.bottom -or $sample.bottom -le $note.top -or
+            $note.right -gt $sample.left) {
+            throw 'The wide layout did not place the example CSV button beside the carrier note.'
+        }
+    }
+}
+
 function Scroll-WindowToEdge([IntPtr]$Window, [bool]$Bottom) {
     $command = if ($Bottom) { 3 } else { 2 } # SB_PAGEDOWN / SB_PAGEUP
     for ($page = 0; $page -lt 16; $page++) {
@@ -493,6 +513,7 @@ function Check-WindowLayouts([IntPtr]$Window, [IntPtr]$ResultControl) {
             }
             Scroll-WindowToEdge $Window $true
             Assert-ControlBounds $Window @(1003, 1005)
+            Assert-SamplePlacement $Window ($width -eq 720)
             Scroll-WindowToEdge $Window $false
         }
         if ($clientWidths[0] - $clientWidths[1] -lt 200) {
