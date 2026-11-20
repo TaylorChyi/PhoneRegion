@@ -6,7 +6,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -41,6 +40,19 @@ public static class NativeWindow
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool EnumChildWindows(IntPtr parent, EnumWindowCallback callback, IntPtr argument);
+
+    public static IntPtr FindDialogChild(IntPtr dialog, string className, int id) {
+        IntPtr found = IntPtr.Zero;
+        EnumChildWindows(dialog, (child, unused) => {
+            if (GetDlgCtrlID(child) == id) {
+                var name = new StringBuilder(64);
+                GetClassNameW(child, name, name.Capacity);
+                if (name.ToString() == className) { found = child; return false; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
@@ -173,20 +185,6 @@ public static class NativeWindow
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool PrintWindow(IntPtr window, IntPtr deviceContext, uint flags);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct GuiThreadInfo {
-        public int size, flags;
-        public IntPtr active, focus, capture, menu, move, caret;
-        public int left, top, right, bottom;
-    }
-    [DllImport("user32.dll")]
-    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
-
-    public static IntPtr FocusedControl(IntPtr window) {
-        var info = new GuiThreadInfo { size = Marshal.SizeOf<GuiThreadInfo>() };
-        uint thread = GetWindowThreadProcessId(window, out uint owner);
-        return GetGUIThreadInfo(thread, ref info) ? info.focus : IntPtr.Zero;
-    }
 }
 '@
 
@@ -322,28 +320,30 @@ function Wait-Dialog([string]$Title, [int]$ProcessId) {
 }
 
 function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame) {
-    # Explorer uses different child IDs for Open and Save. Alt+N focuses the
-    # filename editor in both dialogs on the Windows runner's English desktop.
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    # Explorer builds the file-name ComboBox after the dialog HWND appears.
+    # Locate its Edit[1001] directly; Edit[41477] belongs to the address bar.
+    for ($attempt = 0; $attempt -lt 80; $attempt++) {
         if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog)) {
-            [void][NativeWindow]::SetForegroundWindow($Dialog)
-            if ([NativeWindow]::GetForegroundWindow() -eq $Dialog) {
-                [System.Windows.Forms.SendKeys]::SendWait('%n')
-                [System.Windows.Forms.SendKeys]::SendWait('^a')
-                Set-Clipboard -Value $Path
-                [System.Windows.Forms.SendKeys]::SendWait('^v')
-                Start-Sleep -Milliseconds 350
-                $focused = [NativeWindow]::FocusedControl($Dialog)
-                if ($focused -ne [IntPtr]::Zero -and (Read-WindowText $focused) -eq $Path) {
+            $filename = [NativeWindow]::FindDialogChild($Dialog, 'Edit', 1001)
+            $confirm = [NativeWindow]::FindDialogChild($Dialog, 'Button', 1)
+            if ($filename -ne [IntPtr]::Zero -and $confirm -ne [IntPtr]::Zero -and
+                [NativeWindow]::IsWindowEnabled($filename)) {
+                [void][NativeWindow]::SendTextMessageW($filename, 0x000C, [IntPtr]::Zero, $Path)
+                Start-Sleep -Milliseconds 100
+                if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($confirm) -and
+                    (Read-WindowText $filename) -eq $Path) {
                     if ($DemoFrame) { Save-DemoFrame $Dialog $DemoFrame }
-                    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+                    if (-not [NativeWindow]::PostMessageW($confirm, 0x00F5,
+                        [IntPtr]::Zero, [IntPtr]::Zero)) {
+                        throw 'Could not dispatch the file dialog confirmation.'
+                    }
                     return
                 }
             }
         }
-        Start-Sleep -Milliseconds 150
+        Start-Sleep -Milliseconds 100
     }
-    throw "The filename edit did not retain '$Path'."
+    throw "The file dialog filename control did not accept '$Path'."
 }
 
 function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
