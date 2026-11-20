@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -83,6 +84,10 @@ public static class NativeWindow
     public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")]
     public static extern bool IsWindowEnabled(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
 
     public static IntPtr FindFileNameEdit(IntPtr dialog)
     {
@@ -156,15 +161,19 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path) {
         $accept = [NativeWindow]::GetDlgItem($Dialog, 1)
         if ([NativeWindow]::IsWindowVisible($Dialog) -and [NativeWindow]::IsWindowEnabled($Dialog) -and
             [NativeWindow]::IsWindowVisible($filename) -and [NativeWindow]::IsWindowEnabled($accept)) {
-            $edit = [System.Windows.Automation.AutomationElement]::FromHandle($filename)
-            $value = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-            $edit.SetFocus()
-            $value.SetValue($Path)
-            Start-Sleep -Milliseconds 300
-            if ($value.Current.Value -eq $Path) {
-                $button = [System.Windows.Automation.AutomationElement]::FromHandle($accept)
-                $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                return
+            # Use the file picker's keyboard interface. Explorer maintains a separate
+            # filename model that direct WM_SETTEXT messages do not always update.
+            [void][NativeWindow]::SetForegroundWindow($Dialog)
+            if ([NativeWindow]::GetForegroundWindow() -eq $Dialog) {
+                [System.Windows.Forms.SendKeys]::SendWait('%n')
+                [System.Windows.Forms.SendKeys]::SendWait('^a')
+                Set-Clipboard -Value $Path
+                [System.Windows.Forms.SendKeys]::SendWait('^v')
+                Start-Sleep -Milliseconds 250
+                if ((Read-WindowText $filename) -eq $Path) {
+                    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+                    return
+                }
             }
         }
         Start-Sleep -Milliseconds 150
