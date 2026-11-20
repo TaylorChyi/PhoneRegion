@@ -36,7 +36,7 @@
 
 <h2 align="center">整张表，也能一次查完</h2>
 
-<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.1/example.csv"><strong>下载示例 CSV</strong></a>，或点击拖入框上方的<strong>「保存示例 CSV」</strong>按钮，离线获取同一份示例文件。<br>示例含三种号码格式，单号输入框可试 <code>+86 132 1300 0000</code>。</p>
+<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.2/example.csv"><strong>下载示例 CSV</strong></a>，或点击拖入框上方的<strong>「保存示例 CSV」</strong>按钮，离线获取同一份示例文件。<br>示例含三种号码格式，单号输入框可试 <code>+86 132 1300 0000</code>。</p>
 
 <p align="center">在<strong>「点击或拖入文件」</strong>框中选择或拖入一个 Excel（<code>.xls</code>、<code>.xlsx</code>）或 CSV 文件，随后立即开始解析和查询。<br>号码放在首列即可，其他列无需整理，电脑也无需安装 Excel。<br>Excel 读取第一张工作表的 A 列，CSV 读取第一列。首行可以是「手机号」等常见表头。</p>
 

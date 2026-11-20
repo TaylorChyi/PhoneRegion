@@ -36,7 +36,7 @@
 
 <h2 align="center">Look up an entire file</h2>
 
-<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.1/example.csv"><strong>Download a sample CSV</strong></a>, or click <strong>保存示例 CSV (Save sample CSV)</strong> above the drop area to get the same file offline.<br>It contains three number formats. For a single-number lookup, try <code>+86 132 1300 0000</code>.</p>
+<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.2/example.csv"><strong>Download a sample CSV</strong></a>, or click <strong>保存示例 CSV (Save sample CSV)</strong> above the drop area to get the same file offline.<br>It contains three number formats. For a single-number lookup, try <code>+86 132 1300 0000</code>.</p>
 
 <p align="center">Click the <strong>点击或拖入文件 (Click or drop a file)</strong> box or drag one Excel (<code>.xls</code>, <code>.xlsx</code>) or CSV file onto it. Parsing and lookup start immediately.<br>Put the numbers in the first column and leave other columns as they are. Excel does not need to be installed.<br>The app reads column A of the first worksheet or the first CSV column. A common heading such as 手机号 (mobile number) is optional.</p>
 
