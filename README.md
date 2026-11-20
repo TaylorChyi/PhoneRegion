@@ -36,11 +36,11 @@
 
 <h2 align="center">整张表，也能一次查完</h2>
 
-<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.0/example.csv"><strong>下载示例 CSV</strong></a>，或在应用里点击<strong>「保存示例 CSV」</strong>，离线获取同一份示例文件。<br>示例含三种号码格式，单号输入框可试 <code>+86 132 1300 0000</code>。</p>
+<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.1/example.csv"><strong>下载示例 CSV</strong></a>，或点击拖入框上方的<strong>「保存示例 CSV」</strong>按钮，离线获取同一份示例文件。<br>示例含三种号码格式，单号输入框可试 <code>+86 132 1300 0000</code>。</p>
 
 <p align="center">在<strong>「点击或拖入文件」</strong>框中选择或拖入一个 Excel（<code>.xls</code>、<code>.xlsx</code>）或 CSV 文件，随后立即开始解析和查询。<br>号码放在首列即可，其他列无需整理，电脑也无需安装 Excel。<br>Excel 读取第一张工作表的 A 列，CSV 读取第一列。首行可以是「手机号」等常见表头。</p>
 
-<p align="center">同一格中用空格隔开的多个完整号码会逐个查询。<br>查询完成后，下方出现<strong>「导出结果」</strong>按钮。点击后选择保存位置和 Excel／CSV 格式，取消后也可再次导出。<br>有效号码统一为 11 位，原顺序和重复项保留。导入时不生成结果文件，原表不变。</p>
+<p align="center">同一格中用空格隔开的多个完整号码会逐个查询。<br>拖入框下方的<strong>「导出结果」</strong>按钮始终可见，有可导出的记录时亮起。点击后选择保存位置和 Excel／CSV 格式，取消或保存后都可以再次导出。<br>有效号码统一为 11 位，原顺序和重复项保留。导入时不生成结果文件，原表不变。</p>
 
 <table align="center">
   <thead><tr><th align="center">手机号</th><th align="center">运营商</th><th align="center">归属地省份</th><th align="center">归属地地级市</th></tr></thead>
@@ -50,8 +50,6 @@
     <tr><td align="center">18901600000</td><td align="center">中国电信</td><td align="center">上海市</td><td align="center">上海市</td></tr>
   </tbody>
 </table>
-
-<p align="center">导出文件只含上面四列。窗口会汇总格式错误和未收录号段的数量，方便回查。</p>
 
 <h2 align="center">看看实际操作</h2>
 

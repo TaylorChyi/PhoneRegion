@@ -36,11 +36,11 @@
 
 <h2 align="center">Look up an entire file</h2>
 
-<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.0/example.csv"><strong>Download a sample CSV</strong></a>, or choose <strong>保存示例 CSV (Save sample CSV)</strong> in the app to get the same file offline.<br>It contains three number formats. For a single-number lookup, try <code>+86 132 1300 0000</code>.</p>
+<p align="center"><a href="https://github.com/TaylorChyi/PhoneRegion/releases/download/v1.3.1/example.csv"><strong>Download a sample CSV</strong></a>, or click <strong>保存示例 CSV (Save sample CSV)</strong> above the drop area to get the same file offline.<br>It contains three number formats. For a single-number lookup, try <code>+86 132 1300 0000</code>.</p>
 
 <p align="center">Click the <strong>点击或拖入文件 (Click or drop a file)</strong> box or drag one Excel (<code>.xls</code>, <code>.xlsx</code>) or CSV file onto it. Parsing and lookup start immediately.<br>Put the numbers in the first column and leave other columns as they are. Excel does not need to be installed.<br>The app reads column A of the first worksheet or the first CSV column. A common heading such as 手机号 (mobile number) is optional.</p>
 
-<p align="center">Several complete numbers separated by spaces in one cell produce separate result rows.<br>Once lookup finishes, the <strong>导出结果 (Export results)</strong> button appears below. Click it to choose a save location and Excel or CSV format.<br>If you cancel the save dialog, you can click Export results again. The original file stays intact. Valid numbers are normalised to 11 digits, with the original order and duplicates preserved.</p>
+<p align="center">Several complete numbers separated by spaces in one cell produce separate result rows.<br>The <strong>导出结果 (Export results)</strong> button stays below the drop area and becomes available when there are rows to export. Click it to choose a location and Excel or CSV format.<br>You can export again after saving or cancelling. The original file stays intact. Valid numbers are normalised to 11 digits, with the original order and duplicates preserved.</p>
 
 <table align="center">
   <thead><tr><th align="center">手机号<br><sub>Mobile number</sub></th><th align="center">运营商<br><sub>Carrier</sub></th><th align="center">归属地省份<br><sub>Province</sub></th><th align="center">归属地地级市<br><sub>Prefecture-level area</sub></th></tr></thead>
@@ -50,8 +50,6 @@
     <tr><td align="center">18901600000</td><td align="center">中国电信</td><td align="center">上海市</td><td align="center">上海市</td></tr>
   </tbody>
 </table>
-
-<p align="center">Exports contain only these four columns. The window reports how many inputs are invalid or have an unlisted prefix.</p>
 
 <h2 align="center">See it in action</h2>
 
