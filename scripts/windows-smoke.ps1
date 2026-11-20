@@ -95,6 +95,8 @@ public static class NativeWindow
     }
 
     [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")]
     public static extern bool IsWindowEnabled(IntPtr hwnd);
@@ -307,10 +309,13 @@ function Assert-Result([IntPtr]$InputControl, [IntPtr]$QueryControl, [IntPtr]$Re
 function Wait-Dialog([string]$Title, [int]$ProcessId) {
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
         $dialog = [NativeWindow]::FindWindowW('#32770', $Title)
-        if ($dialog -ne [IntPtr]::Zero) {
+        if ($dialog -ne [IntPtr]::Zero -and [NativeWindow]::IsWindowVisible($dialog) -and
+            [NativeWindow]::IsWindowEnabled($dialog)) {
             [uint32]$dialogProcessId = 0
             [void][NativeWindow]::GetWindowThreadProcessId($dialog, [ref]$dialogProcessId)
-            if ($dialogProcessId -eq $ProcessId) {
+            $cancel = [NativeWindow]::FindDialogChild($dialog, 'Button', 2)
+            if ($dialogProcessId -eq $ProcessId -and $cancel -ne [IntPtr]::Zero -and
+                [NativeWindow]::IsWindowVisible($cancel)) {
                 return $dialog
             }
         }
@@ -350,7 +355,7 @@ function Complete-FileDialog([IntPtr]$Dialog, [string]$Path, [string]$DemoFrame)
         }
         Start-Sleep -Milliseconds 100
     }
-    throw "The file dialog filename control did not accept '$Path'."
+    throw "The file dialog filename control did not accept '$Path' (dialog=$Dialog visible=$([NativeWindow]::IsWindowVisible($Dialog)), edit=$filename, confirm=$confirm)."
 }
 
 function Save-DemoFrame([IntPtr]$Window, [string]$Name) {
@@ -710,12 +715,13 @@ try {
         throw 'Could not open the result save dialog.'
     }
     $cancelDialog = Wait-Dialog '保存查询结果' $application.Id
-    [void][NativeWindow]::PostMessageW($cancelDialog, 0x0111, [IntPtr]2, [IntPtr]::Zero)
-    for ($attempt = 0; $attempt -lt 40 -and
-        [NativeWindow]::IsWindowVisible($cancelDialog); $attempt++) {
+    $cancelButton = [NativeWindow]::FindDialogChild($cancelDialog, 'Button', 2)
+    [void][NativeWindow]::PostMessageW($cancelButton, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    for ($attempt = 0; $attempt -lt 100 -and
+        ([NativeWindow]::IsWindow($cancelDialog) -or -not [NativeWindow]::IsWindowEnabled($window)); $attempt++) {
         Start-Sleep -Milliseconds 50
     }
-    if ([NativeWindow]::IsWindowVisible($cancelDialog)) {
+    if ([NativeWindow]::IsWindow($cancelDialog) -or -not [NativeWindow]::IsWindowEnabled($window)) {
         throw 'The save dialog did not close when cancelled.'
     }
     if (-not [NativeWindow]::IsWindowVisible($exportControl)) {
